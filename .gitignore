@@ -1,0 +1,17 @@
+build/
+build-*/
+dist/
+out/
+.vs/
+.idea/
+*.user
+*.suo
+*.VC.db
+*.dll
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.zip
+
+artifacts/
