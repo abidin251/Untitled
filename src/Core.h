@@ -10,6 +10,10 @@ namespace mc
 {
 	using i64 = std::int64_t;
 
+	// Wallet currency ids the planner treats specially.
+	constexpr int kCoinCurrency = 1;
+	constexpr int kResearchNoteCurrency = 61;
+
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
 	std::string Join(const std::vector<std::string>& aValues, const char* aSeparator);
@@ -78,8 +82,11 @@ namespace mc
 		TradingPost,
 		Currency,
 		Container,
-	};		const char* SourceKindLabel(SourceKind aKind);
-	std::string ItemTypeLabel(const ItemInfo& aItem); 
+	};
+
+	const char* SourceKindLabel(SourceKind aKind);
+	std::string ItemTypeLabel(const ItemInfo& aItem);
+
 
 	enum class Preference
 	{
@@ -103,6 +110,8 @@ namespace mc
 		int MultipleRecipes = 1;
 		int DailyCap = 0;
 		int WeeklyCap = 0;
+		int MerchantCurrencyId = 0;          // what a merchant charges (1 = coin)
+		double MerchantCurrencyAmount = 0.0; // amount of that currency per item
 
 		bool IsCurrency() const { return Type == "Currency"; }
 		bool IsRecipe() const { return Type == "Recipe" && !Components.empty(); }
@@ -114,6 +123,8 @@ namespace mc
 		bool BuyOrderPrices = false;
 		bool IncludeAccountItems = true;
 		bool ShowCompleted = true;
+		bool IncludeResearchNotes = false;   // price the research notes a plan needs
+		i64 ResearchNoteUnitCost = 100;      // estimated coin cost of one research note
 		int MaxDepth = 48;
 		int MaxNodes = 25000;
 	};
@@ -124,10 +135,15 @@ namespace mc
 		std::string Name;
 		std::string Icon;
 		int Quantity = 0;
-		i64 UnitCost = 0;
-		i64 TotalCost = 0;
+		i64 UnitCost = 0;             // coin price per unit; 0 when only another currency buys it
+		i64 TotalCost = 0;            // coin price for the whole quantity
 		SourceKind Source = SourceKind::TradingPost;
 		bool Currency = false;
+		std::string SourceDetail;     // merchant, achievement or acquisition note
+		std::string PriceText;        // per unit price in a non-coin currency, e.g. "2,100 Karma"
+		std::string TotalPriceText;   // the same price for the whole quantity
+		bool FromVendor = false;      // a merchant sells it
+		bool FromTradingPost = false; // the Trading Post sells it
 	};
 
 	struct PlanNode
@@ -173,6 +189,10 @@ namespace mc
 		std::map<int, i64> CurrencyRequired; // total amount the plan asks for
 		std::map<int, i64> CurrencyNeeded;   // amount still missing after the wallet
 		std::map<int, i64> CurrencyOwned;
+		std::vector<PlanNode> GoalRoots;      // one tree per tracked goal in a combined plan
+		i64 ResearchNotesRequired = 0;
+		i64 ResearchNotesNeeded = 0;
+		i64 ResearchNoteCost = 0;             // coin added for the missing research notes
 		int NodeCount = 0;
 		int GoalCount = 1;                    // >1 for a combined tracked plan
 		bool Complete = false;

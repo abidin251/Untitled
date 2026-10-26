@@ -205,6 +205,52 @@ namespace mc
 			}
 		}
 
+		std::string ShoppingSourceCell(const ShoppingItem& aItem)
+		{
+			switch (aItem.Source)
+			{
+			case SourceKind::Vendor:
+			{
+				std::string name = aItem.SourceDetail;
+				const std::size_t paren = name.find(" (");
+				if (paren != std::string::npos)
+				{
+					name.erase(paren);
+				}
+				return name.empty() ? "Merchant" : "Merchant: " + name;
+			}
+			case SourceKind::Achievement:
+				return aItem.SourceDetail.empty() ? "Achievement" : aItem.SourceDetail;
+			case SourceKind::TradingPost:
+				return aItem.FromVendor ? "Trading Post (cheaper)" : "Trading Post";
+			case SourceKind::Currency:
+				return aItem.Currency ? "Wallet currency" : "Crafting";
+			default:
+				return SourceKindLabel(aItem.Source);
+			}
+		}
+
+		std::string ShoppingUnitPrice(const ShoppingItem& aItem)
+		{
+			return aItem.PriceText.empty() ? FormatCoins(aItem.UnitCost) : aItem.PriceText;
+		}
+
+		std::string ShoppingTotalPrice(const ShoppingItem& aItem)
+		{
+			return aItem.TotalPriceText.empty() ? FormatCoins(aItem.TotalCost) : aItem.TotalPriceText;
+		}
+
+		// The shopping list and the crafting steps always describe the same target:
+		// every tracked plan when combining is enabled, otherwise the open plan.
+		std::shared_ptr<const Plan> SelectActivePlan(const App& aApp, const UiSnapshot& aSnapshot)
+		{
+			if (aApp.Settings.CombineTracked && !aApp.Settings.Tracked.empty())
+			{
+				return aSnapshot.TrackedPlan;
+			}
+			return aSnapshot.PlanPtr;
+		}
+
 		std::string TimeAgo(i64 aTimestamp)
 		{
 			if (aTimestamp == 0)
@@ -326,7 +372,12 @@ namespace mc
 			}
 			stream << "Remaining cost: " << FormatCoins(aPlan.RemainingCost) << "\r\n\r\n";				for (const auto& entry : aPlan.Shopping)
 				{
-					stream << entry.Quantity << " x " << entry.Name << " (" << FormatCoins(entry.UnitCost) << " each) = " << FormatCoins(entry.TotalCost);
+					stream << entry.Quantity << " x " << entry.Name;
+					stream << " (" << ShoppingUnitPrice(entry) << " each) = " << ShoppingTotalPrice(entry);
+					if (entry.Source != SourceKind::TradingPost && !entry.SourceDetail.empty())
+					{
+						stream << " - " << entry.SourceDetail;
+					}
 					stream << "\r\n";
 				}
 
@@ -840,7 +891,7 @@ namespace mc
 			}
 
 			const bool useCombined = aApp.Settings.CombineTracked && trackedCount > 0;
-			const std::shared_ptr<const Plan>& plan = useCombined ? aSnapshot.TrackedPlan : aSnapshot.PlanPtr;
+			const std::shared_ptr<const Plan> plan = SelectActivePlan(aApp, aSnapshot);
 			if (!plan)
 			{
 				if (useCombined)
@@ -886,31 +937,43 @@ namespace mc
 				ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
 
 			const float tableHeight = ImGui::GetContentRegionAvail().y * 0.58f;
-			if (ImGui::BeginTable("##mc_shopping", 4, flags, ImVec2(0, tableHeight)))
+			if (ImGui::BeginTable("##mc_shopping", 5, flags, ImVec2(0, tableHeight)))
 			{
 				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 215.0f);
 				ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-				ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 105.0f);
+				ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 105.0f);
 				ImGui::TableHeadersRow();
 
 				for (const auto& entry : plan->Shopping)
 				{
 					ImGui::TableNextRow();
+
 					ImGui::TableSetColumnIndex(0);
-					DrawIcon(aApp, entry.Icon, "item_" + std::to_string(entry.Id), 16.0f);
+					DrawIcon(aApp, entry.Icon, (entry.Currency ? "currency_" : "item_") + std::to_string(entry.Id), 16.0f);
 					ImGui::SameLine(0, 4.0f);
 					ImGui::TextUnformatted(entry.Name.c_str());
 					if (ImGui::IsItemHovered())
 					{
 						ShowItemTooltip(aApp, entry.Id, entry.Currency);
 					}
+
 					ImGui::TableSetColumnIndex(1);
-					ImGui::Text("%d", entry.Quantity);
+					ImGui::TextColored(SourceColor(entry.Source), "%s", ShoppingSourceCell(entry).c_str());
+					if (ImGui::IsItemHovered() && !entry.SourceDetail.empty())
+					{
+						ImGui::SetTooltip("%s", entry.SourceDetail.c_str());
+					}
+
 					ImGui::TableSetColumnIndex(2);
-					ImGui::Text("%s", FormatCoins(entry.UnitCost).c_str());
+					ImGui::Text("%d", entry.Quantity);
+
 					ImGui::TableSetColumnIndex(3);
-					ImGui::Text("%s", FormatCoins(entry.TotalCost).c_str());
+					ImGui::TextUnformatted(ShoppingUnitPrice(entry).c_str());
+
+					ImGui::TableSetColumnIndex(4);
+					ImGui::TextUnformatted(ShoppingTotalPrice(entry).c_str());
 				}
 
 				ImGui::EndTable();
@@ -926,7 +989,25 @@ namespace mc
 			}
 			ImGui::Text("Trading Post total: %s", FormatCoins(tradingPostTotal).c_str());
 			ImGui::SameLine();
-			ImGui::TextDisabled("| Other gold costs: %s", FormatCoins(std::max<i64>(0, plan->RemainingCost - tradingPostTotal)).c_str());
+			ImGui::TextDisabled("| Merchant and other gold costs: %s", FormatCoins(std::max<i64>(0, plan->RemainingCost - tradingPostTotal)).c_str());
+
+			if (plan->ResearchNotesRequired > 0)
+			{
+				if (aApp.Settings.IncludeResearchNotes && aApp.Settings.ResearchNoteCost > 0)
+				{
+					ImGui::Text("Research notes: %s of %s needed at %s each = %s",
+						FormatNumber(plan->ResearchNotesNeeded).c_str(),
+						FormatNumber(plan->ResearchNotesRequired).c_str(),
+						FormatCoins(aApp.Settings.ResearchNoteCost).c_str(),
+						FormatCoins(plan->ResearchNoteCost).c_str());
+				}
+				else
+				{
+					ImGui::TextDisabled("Research notes: %s needed (%s missing) - tick research note crafting cost in Settings to include it.",
+						FormatNumber(plan->ResearchNotesRequired).c_str(),
+						FormatNumber(plan->ResearchNotesNeeded).c_str());
+				}
+			}
 
 			ImGui::Text("Currencies and wallet costs");
 			ImGui::SameLine();
@@ -1045,7 +1126,7 @@ namespace mc
 
 		void DrawCraftingSteps(App& aApp, const UiSnapshot& aSnapshot)
 		{
-			const std::shared_ptr<const Plan>& plan = aSnapshot.PlanPtr;
+			const std::shared_ptr<const Plan> plan = SelectActivePlan(aApp, aSnapshot);
 			if (!plan)
 			{
 				ImGui::TextWrapped("No plan loaded yet. Select a legendary on the Planner tab.");
@@ -1053,7 +1134,14 @@ namespace mc
 			}
 
 			const std::vector<CraftStep> steps = BuildCraftingSteps(*plan);
-			ImGui::Text("Crafting steps for %s", plan->GoalName.c_str());
+			if (plan->GoalCount > 1)
+			{
+				ImGui::Text("Crafting steps for %d tracked plans", plan->GoalCount);
+			}
+			else
+			{
+				ImGui::Text("Crafting steps for %s", plan->GoalName.c_str());
+			}
 			ImGui::SameLine();
 			ImGui::TextDisabled("(%d steps, %s remaining)", static_cast<int>(steps.size()), FormatCoins(plan->RemainingCost).c_str());
 			if (ImGui::Button("Copy steps"))
@@ -1067,7 +1155,7 @@ namespace mc
 			if (steps.empty())
 			{
 				ImGui::Spacing();
-				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "Nothing left to do - everything for this plan is already owned.");
+				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "Nothing left to do - every ingredient is already owned.");
 				return;
 			}
 
@@ -1253,6 +1341,33 @@ namespace mc
 				{
 					aApp.LoadPlan(aApp.SelectedItem, false);
 				}
+				aApp.RefreshTrackedShopping();
+			}
+
+			ImGui::Spacing();
+			ImGui::TextUnformatted("Research notes");
+			ImGui::TextDisabled("Plans list the research notes they need as a wallet currency. Enable this to price the notes you are still missing.");
+			bool notesChanged = ImGui::Checkbox("Include research note crafting cost", &aApp.Settings.IncludeResearchNotes);
+			ImGui::SameLine();
+			double noteCost = static_cast<double>(aApp.Settings.ResearchNoteCost) / 100.0;
+			ImGui::SetNextItemWidth(110.0f);
+			if (ImGui::InputDouble("gold per research note", &noteCost, 0.01, 0.1, "%.2f"))
+			{
+				if (noteCost < 0.0)
+				{
+					noteCost = 0.0;
+				}
+				aApp.Settings.ResearchNoteCost = static_cast<int>(noteCost * 100.0 + 0.5);
+				notesChanged = true;
+			}
+			if (notesChanged)
+			{
+				aApp.SaveSettingsNow();
+				if (aApp.SelectedItem != 0)
+				{
+					aApp.LoadPlan(aApp.SelectedItem, false);
+				}
+				aApp.RefreshTrackedShopping();
 			}
 
 			ImGui::Spacing();
@@ -1351,7 +1466,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.2.0 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.3.0 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "
@@ -1362,8 +1477,9 @@ namespace mc
 			ImGui::BulletText("Full requirement tree with recipes, Mystic Forge, vendors, achievements and containers");
 			ImGui::BulletText("Account synchronization: materials, bank, shared slots, character bags, wallet and armory");
 			ImGui::BulletText("Live Trading Post prices, buy-or-craft comparison and per-item source overrides");
-			ImGui::BulletText("Dependency-ordered crafting steps with amounts, sources, costs and clipboard export");
-			ImGui::BulletText("Aggregated shopping list for one plan or all tracked plans, with shared ownership and clipboard export");
+			ImGui::BulletText("Dependency-ordered crafting steps for every tracked plan, with amounts, sources, costs and clipboard export");
+			ImGui::BulletText("Shopping list for one plan or all tracked plans, showing Trading Post, merchant and achievement sources at the cheapest available cost");
+			ImGui::BulletText("Optional research note crafting cost for the notes a plan still needs");
 			ImGui::BulletText("Item tooltips with rarity, description, prices and chat links");
 
 			ImGui::Spacing();
@@ -1441,8 +1557,8 @@ namespace mc
 		DrawTopBar(aApp, snapshot);
 
 		const ImGuiTabItemFlags selectPlanner = aApp.TabRequest && aApp.ActiveTab == 0 ? ImGuiTabItemFlags_SetSelected : 0;
-		const ImGuiTabItemFlags selectSteps = aApp.TabRequest && aApp.ActiveTab == 1 ? ImGuiTabItemFlags_SetSelected : 0;
-		const ImGuiTabItemFlags selectShopping = aApp.TabRequest && aApp.ActiveTab == 2 ? ImGuiTabItemFlags_SetSelected : 0;
+		const ImGuiTabItemFlags selectShopping = aApp.TabRequest && aApp.ActiveTab == 1 ? ImGuiTabItemFlags_SetSelected : 0;
+		const ImGuiTabItemFlags selectSteps = aApp.TabRequest && aApp.ActiveTab == 2 ? ImGuiTabItemFlags_SetSelected : 0;
 		const ImGuiTabItemFlags selectAccount = aApp.TabRequest && aApp.ActiveTab == 3 ? ImGuiTabItemFlags_SetSelected : 0;
 		const ImGuiTabItemFlags selectSettings = aApp.TabRequest && aApp.ActiveTab == 4 ? ImGuiTabItemFlags_SetSelected : 0;
 		const ImGuiTabItemFlags selectAbout = aApp.TabRequest && aApp.ActiveTab == 5 ? ImGuiTabItemFlags_SetSelected : 0;
@@ -1463,14 +1579,14 @@ namespace mc
 				ImGui::EndChild();
 				ImGui::EndTabItem();
 			}
-			if (ImGui::BeginTabItem("Crafting Steps", nullptr, selectSteps))
-			{
-				DrawCraftingSteps(aApp, snapshot);
-				ImGui::EndTabItem();
-			}
 			if (ImGui::BeginTabItem("Shopping List", nullptr, selectShopping))
 			{
 				DrawShoppingList(aApp, snapshot);
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("Crafting Steps", nullptr, selectSteps))
+			{
+				DrawCraftingSteps(aApp, snapshot);
 				ImGui::EndTabItem();
 			}
 			if (ImGui::BeginTabItem("Account", nullptr, selectAccount))
@@ -1505,16 +1621,17 @@ namespace mc
 		ImGui::Separator();
 		bool changed = false;
 		changed |= ImGui::Checkbox("Prefer buying tradable components", &aApp.Settings.PreferBuyingTradable);
-		changed |= ImGui::Checkbox("Subtract owned materials", &aApp.Settings.IncludeAccountItems);
-		changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
-		if (changed)
-		{
-			aApp.SaveSettingsNow();
-			if (aApp.SelectedItem != 0)
+		changed |= ImGui::Checkbox("Subtract owned materials", &aApp.Settings.IncludeAccountItems);			changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
+			changed |= ImGui::Checkbox("Include research note crafting cost", &aApp.Settings.IncludeResearchNotes);
+			if (changed)
 			{
-				aApp.LoadPlan(aApp.SelectedItem, false);
+				aApp.SaveSettingsNow();
+				if (aApp.SelectedItem != 0)
+				{
+					aApp.LoadPlan(aApp.SelectedItem, false);
+				}
+				aApp.RefreshTrackedShopping();
 			}
-		}
-		ImGui::TextDisabled("The API key and account sources are configured in the Account tab.");
+			ImGui::TextDisabled("The API key and account sources are configured in the Account tab.");
 	}
 }

@@ -621,6 +621,8 @@ namespace mc
 		options.PreferBuyingTradable = aSettings.PreferBuyingTradable;
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
+		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
+		options.ResearchNoteUnitCost = aSettings.ResearchNoteCost;
 
 		std::map<int, Preference> preferences;
 		for (const auto& pair : aSettings.Preferences)
@@ -678,6 +680,8 @@ namespace mc
 		options.PreferBuyingTradable = aSettings.PreferBuyingTradable;
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
+		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
+		options.ResearchNoteUnitCost = aSettings.ResearchNoteCost;
 
 		std::map<int, Preference> preferences;
 		for (const auto& pair : aSettings.Preferences)

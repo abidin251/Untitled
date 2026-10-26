@@ -88,6 +88,15 @@ namespace mc
 				}
 			}
 
+			// A merchant entry is a recipe whose only component is the currency the
+			// merchant charges, e.g. 10000 coin for an Icy Runestone or 2100 karma
+			// for an Obsidian Shard.
+			if (!node.MerchantName.empty() && node.Components.size() == 1 && node.Components.front().IsCurrency())
+			{
+				node.MerchantCurrencyId = node.Components.front().Id;
+				node.MerchantCurrencyAmount = node.Components.front().Quantity;
+			}
+
 			return node;
 		}
 

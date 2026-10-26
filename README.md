@@ -15,8 +15,9 @@ This is a **clean-room port** of the Blish HUD [Mystic Crafting module](https://
 | Account sync | Material storage, bank, shared inventory, character bags, wallet and legendary armory (all optional) |
 | Costs | Live Trading Post prices (instant-buy or buy-order basis), vendor coin costs, Mystic Forge inputs and currency costs |
 | Buy vs. craft | Automatically buys a tradable component when that is cheaper, with a per-item override (automatic / always craft / always buy) |
-| Crafting steps | Dependency-ordered, numbered actions: gather and buy ingredients first, craft the goal last, with amounts, sources and costs; clipboard export |
-| Shopping list | Aggregated purchases for one plan or every tracked plan, unit/total prices, currency requirements and clipboard export |
+| Crafting steps | Dependency-ordered, numbered actions for the open plan or every tracked plan: gather and buy ingredients first, craft the goal last, with amounts, sources and costs; clipboard export |
+| Shopping list | Aggregated purchases for one plan or every tracked plan with a source column: Trading Post, merchant ingredients (Icy Runestones, Mystic Runestones, Obsidian Shards, ...) and achievement ingredients, each at the cheapest available price, plus currency requirements and clipboard export |
+| Research notes | Optional costing of the research notes a plan still needs, at a configurable gold-per-note price |
 | Item details | Icons, rarity, type, description, vendor value, Trading Post prices and chat-link copying |
 | Progress | Remaining cost and "from scratch" cost with an owned-materials progress bar |
 | Workflow | Tracked plans, persisted settings, an API key encrypted with Windows DPAPI, manual refresh and disk caches |
@@ -95,10 +96,11 @@ The tests do not run Nexus or the game. See **Verification** below.
 - **Right-click a tree row** — force automatic/craft/buy for that item, copy the item name, or copy its chat link.
 - **Refresh** — re-fetches the acquisition graph and prices for the current plan.
 - **Track** — pins the plan to the tracked list and marks it in the catalog.
-- **Crafting Steps tab** — a flat, numbered task list derived from the plan: gather currency, buy tradable components and craft each intermediate in dependency order, ending with the goal. Coin is left out because it is already part of the gold totals. **Copy steps** exports the list.
-- **Shopping List tab** — aggregated Trading Post purchases plus wallet/currency requirements and shortfalls. Enable **Combine all tracked plans** to merge every tracked plan into one list; owned materials and wallet balances are allocated across the plans in tracked order, so shared ingredients are only subtracted once. **Copy list** exports the current view as plain text.
+- **Shopping List tab** — aggregated purchases plus wallet/currency requirements and shortfalls. Every line names its source: Trading Post, a merchant (with the merchant and map in the tooltip) or an achievement, and merchant prices are shown in the currency the merchant asks for (coin, karma, spirit shards, ...). Enable **Combine all tracked plans** to merge every tracked plan into one list; owned materials and wallet balances are allocated across the plans in tracked order, so shared ingredients are only subtracted once. **Copy list** exports the current view as plain text.
+- **Crafting Steps tab** — a flat, numbered task list for the same target as the shopping list (every tracked plan when combining is on): gather currency, buy vendor and tradable components and craft each intermediate in dependency order, ending with the goal. Coin is left out because it is already part of the gold totals. **Copy steps** exports the list.
+- **Research notes** — research notes are a wallet currency, so the plan already reports how many it needs. Tick **Include research note crafting cost** in Settings (or the options page) to price the missing notes at the **gold per research note** value you enter; the default is 1s. Use the current price per note from [true-farming](https://www.true-farming.com/salvage/research-notes) if you want a live figure.
 - **Account tab** — API key, synchronization status, permissions, data-source toggles and wallet balances.
-- **Settings tab** — price basis, buy-vs-craft behavior, ownership subtraction, density, tracked plans, data provider URL and cache controls.
+- **Settings tab** — price basis, buy-vs-craft behavior, ownership subtraction, density, research note cost, tracked plans, data provider URL and cache controls.
 - **Open item** — enter any item ID next to the catalog filters to build a plan for a non-legendary item.
 
 ### Price basis
@@ -159,20 +161,21 @@ tests/
 1. The selected item's acquisition graph is loaded from the provider and parsed into `RecipeNode`s.
 2. All referenced item IDs are resolved through the GW2 API (metadata) and Trading Post (prices).
 3. `BuildPlan` walks the graph, consuming owned items and currencies from a shared pool so shared ingredients are not double-counted.
-4. Each recipe node is costed recursively. If the item is tradable and cheaper to buy, the node collapses into a Trading Post purchase (unless overridden).
-5. Currency components are accumulated separately; coin costs from vendors are included in the gold total.
-6. A second pass with an empty account produces the "from scratch" denominator for progress.
-7. For the combined shopping list, `BuildCombinedPlan` runs a plan per tracked goal against one ownership pool, deducting what each goal used before costing the next, then merges the shopping lists, currency requirements and totals.
-8. The resulting immutable `Plan` objects are published to the render thread.
+4. Each recipe node is costed recursively. If the item is tradable and cheaper to buy, the node collapses into a Trading Post purchase (unless overridden). A merchant ingredient is treated as a purchase too, so the cheaper of the merchant price and the Trading Post listing wins; a merchant that charges karma or another currency costs no gold and keeps its price visible on the shopping line.
+5. Currency components are accumulated separately; coin costs from vendors are included in the gold total. Merchant and achievement ingredients are listed on the shopping list with their source, and the merchant and achievement details are kept for the tooltip.
+6. Research notes (wallet currency 61) are always reported; when the option is on, the notes still missing are priced at the configured cost per note and added to the remaining and from-scratch totals.
+7. A second pass with an empty account produces the "from scratch" denominator for progress.
+8. For the combined shopping list, `BuildCombinedPlan` runs a plan per tracked goal against one ownership pool, deducting what each goal used before costing the next, then merges the shopping lists, currency requirements and totals. It also keeps each goal's tree, so `BuildCraftingSteps` can list the steps of every tracked goal in turn.
+9. The resulting immutable `Plan` objects are published to the render thread.
 
 ## Verification
 
 What has been checked in this repository:
 
-- **Build**: cross-compiled with LLVM-MinGW/Clang 23 for x86-64 Windows; `GetAddonDef` is exported and the DLL imports only Windows system libraries.
-- **Unit tests**: planner and parser tests pass.
-- **UI smoke test**: every tab and the Nexus options page renders in a headless ImGui 1.80 context without assertions.
-- **Real data**: the parser/planner were exercised against the live Frostfang graph (664 raw nodes, 236 item/price lookups) and live GW2 item and Trading Post data, producing a 56-node costed plan, a 53-step crafting list, a 17-item shopping list and a 1,151g 97s 90c total. Giving the test account half of the required Mystic Coins reduced the remaining cost to 897g 20s 86c and reported 22.1% progress.
+- **Build**: cross-compiled with LLVM-MinGW (Clang 18) for x86-64 Windows; `GetAddonDef` is exported and the DLL imports only Windows system libraries (no `_wassert`, no libc++ runtime).
+- **Unit tests**: planner and parser tests pass, including merchant ingredients, achievement ingredients, the optional research note cost, the cheapest merchant-vs-Trading-Post choice and crafting steps for a combined plan.
+- **UI smoke test**: every tab and the Nexus options page renders in a headless ImGui 1.80 context without assertions, with Trading Post, merchant, achievement and research note shopping lines.
+- **Real data**: the parser/planner were exercised against live gw2efficiency graphs plus live GW2 item, price and currency data. Twilight (30704) produced 25 shopping lines including 100 Icy Runestones at 1g each from Rojan the Penitent and karma or spirit shard prices for the other merchant ingredients; Obsidian Heavy Breastplate (101521) produced 3,500 research notes priced at 1s each (35g) inside a 403g 40s 11c plan; a combined Twilight plus Obsidian plan listed 189 steps across both goals.
 
 What has **not** been checked here: loading the DLL inside Guild Wars 2 with Nexus. This environment has no Windows game client, so in-game rendering, the keybind/Quick Access flow, WinHTTP access from the game process and DPAPI behavior on the target machine still need a manual pass.
 

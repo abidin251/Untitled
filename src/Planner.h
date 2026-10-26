@@ -18,13 +18,14 @@ namespace mc
 		const PlanOptions& aOptions,
 		const std::map<int, Preference>& aPreferences);
 
+	// Linearizes a plan into dependency-ordered actions: ingredients first, the
+	// goal last. Already-owned nodes and coin costs are omitted. A combined plan
+	// lists the steps of every tracked goal it was built from.
+	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan);
+
 	// Builds one plan per goal against a shared ownership pool, then merges the
 	// shopping lists and currency requirements into a single plan. Owned items
 	// are consumed in goal order so shared materials are never counted twice.
-	// Linearizes a plan into dependency-ordered actions: ingredients first, the
-	// goal last. Already-owned nodes and coin costs are omitted.
-	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan);
-
 	Plan BuildCombinedPlan(
 		const std::vector<RecipeNode>& aRoots,
 		const ItemDb& aItems,

@@ -99,6 +99,76 @@ namespace mc
 			return detail;
 		}
 
+		std::string CurrencyPriceText(const PlanContext& aContext, int aCurrencyId, i64 aAmount)
+		{
+			auto it = aContext.Currencies.find(aCurrencyId);
+			const std::string name = it != aContext.Currencies.end() && !it->second.Name.empty()
+				? it->second.Name
+				: "Currency #" + std::to_string(aCurrencyId);
+			return FormatNumber(aAmount) + " " + name;
+		}
+
+		void AddShoppingRow(
+			PlanContext& aContext,
+			const PlanNode& aNode,
+			SourceKind aSource,
+			i64 aUnitCost,
+			i64 aTotalCost,
+			bool aFromVendor = false,
+			bool aFromTradingPost = false)
+		{
+			ShoppingItem row;
+			row.Id = aNode.Id;
+			row.Name = aNode.Name;
+			row.Icon = aNode.Icon;
+			row.Quantity = aNode.Remaining;
+			row.UnitCost = aUnitCost;
+			row.TotalCost = aTotalCost;
+			row.Source = aSource;
+			row.SourceDetail = aNode.SourceDetail;
+			row.FromVendor = aFromVendor;
+			row.FromTradingPost = aFromTradingPost;
+			aContext.Shopping.push_back(std::move(row));
+		}
+
+		// Lists an ingredient the player has to buy from a merchant, together with
+		// the merchant price: coin when the merchant charges coin, otherwise the
+		// currency the merchant asks for (karma, laurels, ...).
+		void AddVendorRow(PlanContext& aContext, const PlanNode& aNode, const RecipeNode& aRecipe)
+		{
+			AddShoppingRow(
+				aContext,
+				aNode,
+				SourceKind::Vendor,
+				aNode.Remaining > 0 ? aNode.TotalCost / aNode.Remaining : 0,
+				aNode.TotalCost,
+				true,
+				aNode.Tradable);
+
+			// The merchant won, but the item can still be bought with gold, so the
+			// shopping line reports the alternative price next to the chosen one.
+			if (aNode.Tradable)
+			{
+				const i64 tradingPostUnit = UnitPrice(aContext, aNode.Id);
+				if (tradingPostUnit > 0)
+				{
+					ShoppingItem& alternative = aContext.Shopping.back();
+					alternative.SourceDetail += " - Trading Post " + FormatCoins(tradingPostUnit) + " each";
+				}
+			}
+
+			if (aRecipe.MerchantCurrencyId == 0 || aRecipe.MerchantCurrencyId == kCoinCurrency)
+			{
+				return;
+			}
+
+			ShoppingItem& row = aContext.Shopping.back();
+			row.UnitCost = 0;
+			row.TotalCost = 0;
+			row.PriceText = CurrencyPriceText(aContext, aRecipe.MerchantCurrencyId, static_cast<i64>(aRecipe.MerchantCurrencyAmount + 0.5));
+			row.TotalPriceText = CurrencyPriceText(aContext, aRecipe.MerchantCurrencyId, static_cast<i64>(aRecipe.MerchantCurrencyAmount * aNode.Remaining + 0.5));
+		}
+
 		void FillItemMetadata(PlanContext& aContext, PlanNode& aNode, int aItemId)
 		{
 			auto it = aContext.Items.find(aItemId);
@@ -220,6 +290,7 @@ namespace mc
 					node.Children.push_back(std::move(child));
 				}
 
+				const bool vendorNode = KindForRecipe(aNode) == SourceKind::Vendor;
 				const Preference preference = GetPreference(aContext, aNode.Id);
 				const i64 buyCost = unitPrice * node.Remaining;
 				bool buy = false;
@@ -229,9 +300,14 @@ namespace mc
 					{
 						buy = true;
 					}
-					else if (preference == Preference::Auto && aContext.Options.PreferBuyingTradable)
+					else if (preference == Preference::Auto)
 					{
-						buy = buyCost < craftCost;
+						// Buying from a merchant and buying from the Trading Post are both
+						// purchases, so the cheaper of the two is always used. Crafting
+						// still follows the user's preference.
+						buy = vendorNode
+							? buyCost <= craftCost
+							: (aContext.Options.PreferBuyingTradable && buyCost < craftCost);
 					}
 				}
 
@@ -239,11 +315,13 @@ namespace mc
 				{
 					node.Children.clear();
 					node.Source = SourceKind::TradingPost;
-					node.SourceDetail = "Buy from Trading Post";
+					node.SourceDetail = vendorNode && !aNode.MerchantName.empty()
+						? "Buy from Trading Post - cheaper than " + aNode.MerchantName
+						: "Buy from Trading Post";
 					node.UnitCost = unitPrice;
 					node.TotalCost = buyCost;
 					node.Purchasable = true;
-					aContext.Shopping.push_back({ aNode.Id, node.Name, node.Icon, node.Remaining, unitPrice, buyCost, SourceKind::TradingPost, false });
+					AddShoppingRow(aContext, node, SourceKind::TradingPost, unitPrice, buyCost, vendorNode, true);
 				}
 				else
 				{
@@ -260,6 +338,10 @@ namespace mc
 					node.TotalCost = craftCost;
 					node.UnitCost = node.Remaining > 0 ? craftCost / node.Remaining : 0;
 					node.Crafts = crafts;
+					if (node.Source == SourceKind::Vendor)
+					{
+						AddVendorRow(aContext, node, aNode);
+					}
 				}
 				return node;
 			}
@@ -271,7 +353,7 @@ namespace mc
 				node.UnitCost = unitPrice;
 				node.TotalCost = unitPrice * node.Remaining;
 				node.Purchasable = true;
-				aContext.Shopping.push_back({ aNode.Id, node.Name, node.Icon, node.Remaining, unitPrice, node.TotalCost, SourceKind::TradingPost, false });
+				AddShoppingRow(aContext, node, SourceKind::TradingPost, unitPrice, node.TotalCost, !aNode.MerchantName.empty(), true);
 				return node;
 			}
 
@@ -281,6 +363,8 @@ namespace mc
 				node.SourceDetail = aNode.AchievementId != 0
 					? "Achievement #" + std::to_string(aNode.AchievementId)
 					: "Achievement";
+				// Nothing to buy, but the ingredient still belongs on the shopping list.
+				AddShoppingRow(aContext, node, SourceKind::Achievement, 0, 0);
 			}
 			else if (!aNode.MerchantName.empty())
 			{
@@ -290,6 +374,7 @@ namespace mc
 				{
 					node.SourceDetail += " (" + aNode.MerchantLocations + ")";
 				}
+				AddVendorRow(aContext, node, aNode);
 			}
 			else
 			{
@@ -330,6 +415,43 @@ namespace mc
 				return a.Name < b.Name;
 			});
 			return result;
+		}
+
+		// Research notes are a wallet currency earned by crafting and salvaging
+		// gear, so the plan can optionally price the notes it still needs.
+		void ApplyResearchNotes(Plan& aPlan, PlanContext& aContext, i64 aRequired, i64 aFullRequired)
+		{
+			aPlan.ResearchNotesRequired = aRequired;
+			aPlan.ResearchNotesNeeded = aContext.CurrencyNeeded[kResearchNoteCurrency];
+			if (!aContext.Options.IncludeResearchNotes || aContext.Options.ResearchNoteUnitCost <= 0 || aPlan.ResearchNotesNeeded <= 0)
+			{
+				return;
+			}
+
+			const i64 cost = aPlan.ResearchNotesNeeded * aContext.Options.ResearchNoteUnitCost;
+			aPlan.ResearchNoteCost = cost;
+			aPlan.RemainingCost += cost;
+			aPlan.FullCost += aFullRequired * aContext.Options.ResearchNoteUnitCost;
+
+			ShoppingItem row;
+			row.Id = kResearchNoteCurrency;
+			row.Name = "Research Note";
+			row.Quantity = static_cast<int>(aPlan.ResearchNotesNeeded);
+			row.UnitCost = aContext.Options.ResearchNoteUnitCost;
+			row.TotalCost = cost;
+			row.Source = SourceKind::Currency;
+			row.Currency = true;
+			row.SourceDetail = "Crafted and salvaged with a research kit";
+			auto currency = aContext.Currencies.find(kResearchNoteCurrency);
+			if (currency != aContext.Currencies.end())
+			{
+				if (!currency->second.Name.empty())
+				{
+					row.Name = currency->second.Name;
+				}
+				row.Icon = currency->second.Icon;
+			}
+			aContext.Shopping.push_back(std::move(row));
 		}
 	}
 
@@ -387,7 +509,6 @@ namespace mc
 
 		plan.Root = BuildNode(context, root, 0);
 		plan.RemainingCost = plan.Root.TotalCost;
-		plan.Shopping = AggregateShopping(context.Shopping);
 		plan.CurrencyRequired = context.CurrencyRequired;
 		plan.CurrencyNeeded = context.CurrencyNeeded;
 		plan.CurrencyOwned = aAccount.Currencies;
@@ -416,6 +537,9 @@ namespace mc
 		};
 		const PlanNode fullRoot = BuildNode(fullContext, root, 0);
 		plan.FullCost = fullRoot.TotalCost;
+
+		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullContext.CurrencyRequired[kResearchNoteCurrency]);
+		plan.Shopping = AggregateShopping(context.Shopping);
 
 		return plan;
 	}
@@ -494,12 +618,26 @@ namespace mc
 
 			aOut.push_back(std::move(step));
 		}
-	}		std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan)
+	}
+
+	// Linearizes a plan into dependency-ordered actions: ingredients first, the
+	// goal last. A combined plan lists the steps of every tracked goal in turn.
+	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan)
+	{
+		std::vector<CraftStep> steps;
+		if (!aPlan.GoalRoots.empty())
 		{
-			std::vector<CraftStep> steps;
-			CollectSteps(aPlan.Root, steps);
-			return steps;
+			for (const auto& goal : aPlan.GoalRoots)
+			{
+				CollectSteps(goal, steps);
+			}
 		}
+		else
+		{
+			CollectSteps(aPlan.Root, steps);
+		}
+		return steps;
+	}
 
 	Plan BuildCombinedPlan(
 		const std::vector<RecipeNode>& aRoots,
@@ -532,6 +670,10 @@ namespace mc
 			combined.RemainingCost += plan.RemainingCost;
 			combined.FullCost += plan.FullCost;
 			combined.NodeCount += plan.NodeCount;
+			combined.ResearchNotesRequired += plan.ResearchNotesRequired;
+			combined.ResearchNotesNeeded += plan.ResearchNotesNeeded;
+			combined.ResearchNoteCost += plan.ResearchNoteCost;
+			combined.GoalRoots.push_back(plan.Root);
 			entries.insert(entries.end(), plan.Shopping.begin(), plan.Shopping.end());
 			if (!plan.GoalName.empty())
 			{
@@ -547,8 +689,7 @@ namespace mc
 				combined.CurrencyNeeded[pair.first] += pair.second;
 			}
 
-			std::function<void(const PlanNode&)> consume = [&](const PlanNode& aNode) {
-				if (aNode.Owned > 0)
+			std::function<void(const PlanNode&)> consume = [&](const PlanNode& aNode) {				if (aNode.Owned > 0)
 				{
 					if (aNode.IsCurrency)
 					{

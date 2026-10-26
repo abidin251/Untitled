@@ -202,7 +202,54 @@ namespace
 		item.Quantity = 150;
 		item.UnitCost = 40;
 		item.TotalCost = 6000;
+		item.Source = mc::SourceKind::TradingPost;
+		item.FromTradingPost = true;
 		plan->Shopping.push_back(item);
+
+		mc::ShoppingItem vendor;
+		vendor.Id = 203;
+		vendor.Name = "Icy Runestone";
+		vendor.Quantity = 2;
+		vendor.UnitCost = 10000;
+		vendor.TotalCost = 20000;
+		vendor.Source = mc::SourceKind::Vendor;
+		vendor.SourceDetail = "Rojan the Penitent (Earthshake Basin, Frostgorge Sound)";
+		vendor.FromVendor = true;
+		plan->Shopping.push_back(vendor);
+
+		mc::ShoppingItem karma;
+		karma.Id = 19925;
+		karma.Name = "Obsidian Shard";
+		karma.Quantity = 5;
+		karma.Source = mc::SourceKind::Vendor;
+		karma.SourceDetail = "Tactician Deathstrider (Straits of Devastation)";
+		karma.PriceText = "2,100 Karma";
+		karma.TotalPriceText = "10,500 Karma";
+		karma.FromVendor = true;
+		plan->Shopping.push_back(karma);
+
+		mc::ShoppingItem achievement;
+		achievement.Id = 204;
+		achievement.Name = "Test Trophy";
+		achievement.Quantity = 1;
+		achievement.Source = mc::SourceKind::Achievement;
+		achievement.SourceDetail = "Achievement #2438";
+		plan->Shopping.push_back(achievement);
+
+		mc::ShoppingItem notes;
+		notes.Id = mc::kResearchNoteCurrency;
+		notes.Name = "Research Note";
+		notes.Quantity = 250;
+		notes.UnitCost = 100;
+		notes.TotalCost = 25000;
+		notes.Source = mc::SourceKind::Currency;
+		notes.Currency = true;
+		notes.SourceDetail = "Crafted and salvaged with a research kit";
+		plan->Shopping.push_back(notes);
+		plan->ResearchNotesRequired = 250;
+		plan->ResearchNotesNeeded = 250;
+		plan->ResearchNoteCost = 25000;
+
 		plan->CurrencyNeeded[1] = 400000;
 		plan->CurrencyNeeded[23] = 200;
 		plan->CurrencyOwned[1] = 100000;
@@ -266,6 +313,8 @@ int main()
 	app.Settings.Tracked.push_back(100);
 	app.Settings.Tracked.push_back(101);
 	app.Settings.CombineTracked = true;
+	app.Settings.IncludeResearchNotes = true;
+	app.Settings.ResearchNoteCost = 100;
 
 	{
 		auto combinedPlan = MakePlan();
@@ -317,9 +366,9 @@ int main()
 		}
 	}
 
-	// The shopping tab must also render in single-plan mode.
+	// The shopping list and the crafting steps must also render in single-plan mode.
 	app.Settings.CombineTracked = false;
-	app.ActiveTab = 2;
+	app.ActiveTab = 1;
 	app.TabRequest = true;
 	for (int frame = 0; frame < 3; ++frame)
 	{
@@ -329,6 +378,6 @@ int main()
 	}
 
 	ImGui::DestroyContext();
-	std::printf("UI smoke test passed (all tabs rendered, crafting steps, combined and single shopping list).\n");
+	std::printf("UI smoke test passed (all tabs rendered, tracked crafting steps, vendor, achievement and research note shopping lines).\n");
 	return 0;
 }

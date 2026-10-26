@@ -44,6 +44,28 @@ namespace
 		return node;
 	}
 
+	// A merchant entry is a recipe whose only component is the currency the
+	// merchant charges; 10000 coin is one gold, 2100 karma is an Obsidian Shard.
+	RecipeNode MerchantRecipe(int aId, double aQuantity, int aCurrencyId, double aCurrencyAmount, const char* aName, const char* aLocations)
+	{
+		RecipeNode currency;
+		currency.Id = aCurrencyId;
+		currency.Type = "Currency";
+		currency.Quantity = aCurrencyAmount;
+
+		RecipeNode node;
+		node.Id = aId;
+		node.Type = "Recipe";
+		node.Quantity = aQuantity;
+		node.Components = { currency };
+		node.Disciplines = { "Merchant" };
+		node.MerchantName = aName;
+		node.MerchantLocations = aLocations;
+		node.MerchantCurrencyId = aCurrencyId;
+		node.MerchantCurrencyAmount = aCurrencyAmount;
+		return node;
+	}
+
 	void TestSimpleCraftCost()
 	{
 		ItemDb items;
@@ -324,6 +346,208 @@ namespace
 		Check(BuildCraftingSteps(empty).empty(), "an empty plan has no crafting steps");
 	}
 
+	void TestCombinedStepsForTrackedGoals()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Ore";
+		items[100].Id = 100;
+		items[100].Name = "Sword";
+		items[101].Id = 101;
+		items[101].Name = "Staff";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		const std::vector<RecipeNode> roots = {
+			Recipe(100, 1, 1, { ItemNode(1, 2) }, "Weaponsmith"),
+			Recipe(101, 1, 1, { ItemNode(1, 1) }, "Artificer")
+		};
+
+		const Plan combined = BuildCombinedPlan(roots, items, prices, {}, {}, options, {});
+		Check(combined.GoalRoots.size() == 2, "a combined plan keeps one tree per tracked goal");
+
+		const std::vector<CraftStep> steps = BuildCraftingSteps(combined);
+		Check(steps.size() == 4, "crafting steps cover every tracked goal");
+		Check(steps[0].Action == CraftAction::Buy && steps[0].Remaining == 2, "the first goal ingredient comes first");
+		Check(steps[1].Action == CraftAction::Craft && steps[1].Name == "Sword", "the first goal craft follows its ingredient");
+		Check(steps[2].Action == CraftAction::Buy && steps[2].Remaining == 1, "the second goal ingredient follows");
+		Check(steps[3].Action == CraftAction::Craft && steps[3].Name == "Staff", "the second goal craft is last");
+	}
+
+	void TestVendorIngredients()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[200].Id = 200;
+		items[200].Name = "Icy Runestone";
+		items[201].Id = 201;
+		items[201].Name = "Obsidian Shard";
+
+		CurrencyDb currencies;
+		currencies[1].Id = 1;
+		currencies[1].Name = "Coin";
+		currencies[2].Id = 2;
+		currencies[2].Name = "Karma";
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// Icy Runestones cost one gold each from a merchant and cannot be traded,
+		// so the merchant is the only source.
+		const RecipeNode icy = MerchantRecipe(200, 2, 1, 10000, "Rojan the Penitent", "Earthshake Basin, Frostgorge Sound");
+		const RecipeNode root = Recipe(100, 1, 1, { icy }, "Weaponsmith");
+		const Plan plan = BuildPlan(root, 1, items, {}, currencies, {}, options, {});
+
+		Check(plan.RemainingCost == 20000, "a merchant ingredient is costed at the merchant price");
+		bool found = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			if (entry.Id != 200)
+			{
+				continue;
+			}
+			found = true;
+			Check(entry.Source == SourceKind::Vendor, "merchant ingredients are listed with a vendor source");
+			Check(entry.Quantity == 2 && entry.UnitCost == 10000 && entry.TotalCost == 20000, "the merchant price is carried on the shopping line");
+			Check(entry.FromVendor && !entry.FromTradingPost, "the line records that only a merchant sells the item");
+			Check(entry.SourceDetail.find("Rojan the Penitent") != std::string::npos, "the merchant name is kept for the shopping list");
+		}
+		Check(found, "merchant ingredients appear on the shopping list");
+
+		// The same ingredient is cheaper on the Trading Post, so that becomes the
+		// cheapest available method.
+		PriceDb prices;
+		prices[200].Id = 200;
+		prices[200].Sell = 8000;
+		const Plan bought = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(bought.RemainingCost == 16000, "a tradable merchant ingredient uses the cheaper Trading Post price");
+		for (const auto& entry : bought.Shopping)
+		{
+			if (entry.Id != 200)
+			{
+				continue;
+			}
+			Check(entry.Source == SourceKind::TradingPost && entry.FromVendor, "the cheapest source is reported with both options known");
+			Check(entry.UnitCost == 8000 && entry.TotalCost == 16000, "the cheaper Trading Post price is counted");
+		}
+
+		// A karma merchant costs no coin, so the price is shown in karma instead.
+		const RecipeNode shard = MerchantRecipe(201, 1, 2, 2100, "Tactician Deathstrider", "Straits of Devastation");
+		const Plan karma = BuildPlan(Recipe(100, 1, 1, { shard }, "Weaponsmith"), 1, items, {}, currencies, {}, options, {});
+		Check(karma.RemainingCost == 0, "a karma ingredient adds no coin cost");
+		found = false;
+		for (const auto& entry : karma.Shopping)
+		{
+			if (entry.Id != 201)
+			{
+				continue;
+			}
+			found = true;
+			Check(entry.Source == SourceKind::Vendor, "karma ingredients are listed with a vendor source");
+			Check(entry.PriceText == "2,100 Karma", "a non-coin merchant price is shown in its currency");
+			Check(entry.TotalPriceText == "2,100 Karma", "the non-coin total uses the same currency");
+			Check(entry.UnitCost == 0 && entry.TotalCost == 0, "a non-coin price is never counted as coin");
+		}
+		Check(found, "karma ingredients appear on the shopping list");
+	}
+
+	void TestAchievementIngredients()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[204].Id = 204;
+		items[204].Name = "Achievement Trophy";
+
+		RecipeNode trophy = ItemNode(204, 3);
+		trophy.AchievementId = 2438;
+
+		PlanOptions options;
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { trophy }, "Weaponsmith"), 1, items, {}, {}, {}, options, {});
+
+		Check(plan.RemainingCost == 0, "achievement ingredients do not add gold cost");
+		bool found = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			if (entry.Id != 204)
+			{
+				continue;
+			}
+			found = true;
+			Check(entry.Source == SourceKind::Achievement, "achievement ingredients are listed with an achievement source");
+			Check(entry.Quantity == 3 && entry.TotalCost == 0, "the shortfall is listed without a price");
+			Check(entry.SourceDetail == "Achievement #2438", "the achievement id is kept for the shopping list");
+		}
+		Check(found, "achievement ingredients appear on the shopping list");
+	}
+
+	void TestResearchNoteCost()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Ore";
+		items[100].Id = 100;
+		items[100].Name = "Obsidian Armor";
+
+		CurrencyDb currencies;
+		currencies[kResearchNoteCurrency].Id = kResearchNoteCurrency;
+		currencies[kResearchNoteCurrency].Name = "Research Note";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		RecipeNode notes;
+		notes.Id = kResearchNoteCurrency;
+		notes.Type = "Currency";
+		notes.Quantity = 250;
+
+		const RecipeNode root = Recipe(100, 1, 1, { ItemNode(1, 2), notes }, "Armorsmith");
+
+		PlanOptions options;
+		options.IncludeResearchNotes = true;
+		options.ResearchNoteUnitCost = 100; // one silver per note
+		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+
+		Check(plan.ResearchNotesRequired == 250 && plan.ResearchNotesNeeded == 250, "the plan reports the research notes it needs");
+		Check(plan.ResearchNoteCost == 25000, "research notes are priced at the configured cost");
+		Check(plan.RemainingCost == 25200, "the note cost is part of the remaining cost");
+		Check(plan.FullCost == 25200, "the note cost is part of the from-scratch cost");
+
+		bool found = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			if (entry.Id != kResearchNoteCurrency)
+			{
+				continue;
+			}
+			found = true;
+			Check(entry.Currency && entry.Source == SourceKind::Currency, "research notes are listed as a wallet currency line");
+			Check(entry.Name == "Research Note" && entry.Quantity == 250 && entry.TotalCost == 25000, "the note line carries the priced quantity");
+		}
+		Check(found, "research notes appear on the shopping list");
+
+		// Notes already in the wallet are not paid for twice.
+		AccountData account;
+		account.Valid = true;
+		account.Currencies[kResearchNoteCurrency] = 50;
+		const Plan partlyOwned = BuildPlan(root, 1, items, prices, currencies, account, options, {});
+		Check(partlyOwned.ResearchNotesNeeded == 200 && partlyOwned.ResearchNoteCost == 20000, "only the missing notes are priced");
+		Check(partlyOwned.RemainingCost == 20200, "owned notes reduce the remaining cost");
+
+		// With the option off the notes are still reported, just not priced.
+		options.IncludeResearchNotes = false;
+		const Plan unpriced = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(unpriced.ResearchNotesRequired == 250 && unpriced.ResearchNoteCost == 0, "notes are reported but not priced when the option is off");
+		Check(unpriced.RemainingCost == 200, "unpriced notes add no gold cost");
+	}
+
 	void TestParseRecipeTree()
 	{
 		const std::string json = R"([
@@ -348,6 +572,32 @@ namespace
 		Check(root.Components.size() == 2, "root components parsed");
 		Check(root.Components[0].Components[0].Id == 19721, "nested components parsed");
 		Check(root.Components[0].Disciplines.size() == 1 && root.Components[0].Disciplines[0] == "Mystic Forge", "disciplines parsed");
+	}
+
+	void TestParseMerchantPrice()
+	{
+		const std::string json = R"([
+			{
+				"id": 19676,
+				"type": "Recipe",
+				"quantity": 1,
+				"output": 1,
+				"components": [ { "id": 1, "type": "Currency", "quantity": 10000 } ],
+				"disciplines": ["Merchant"],
+				"merchant": { "name": "Rojan the Penitent", "locations": ["Earthshake Basin, Frostgorge Sound"] },
+				"multipleRecipeCount": 1,
+				"daily_purchase_cap": 0,
+				"weekly_purchase_cap": 0
+			}
+		])";
+
+		RecipeNode root;
+		std::string error;
+		Check(ParseRecipeTree(json, root, error), "merchant recipe JSON parses");
+		Check(root.MerchantName == "Rojan the Penitent", "merchant name parses");
+		Check(root.MerchantLocations == "Earthshake Basin, Frostgorge Sound", "merchant locations parse");
+		Check(root.MerchantCurrencyId == 1 && root.MerchantCurrencyAmount == 10000.0, "the merchant currency price parses");
+		Check(root.Components.size() == 1 && root.Components[0].IsCurrency(), "the merchant price is a currency component");
 	}
 
 	void TestParseItemsAndPrices()
@@ -390,8 +640,14 @@ int main()
 	TestFractionalOutput();
 	TestCurrencies();
 	TestCombinedPlans();
-	TestCombinedCurrencies();		TestCraftingSteps();
+	TestCombinedCurrencies();
+	TestCraftingSteps();
+	TestCombinedStepsForTrackedGoals();
+	TestVendorIngredients();
+	TestAchievementIngredients();
+	TestResearchNoteCost();
 	TestParseRecipeTree();
+	TestParseMerchantPrice();
 	TestParseItemsAndPrices();
 	TestFormatting();
 
