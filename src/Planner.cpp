@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <utility>
 
 namespace mc
@@ -97,6 +98,18 @@ namespace mc
 				detail += " - " + std::to_string(aNode.WeeklyCap) + "/week";
 			}
 			return detail;
+		}
+
+		// The merchant line without the "(1 of N sources)" suffix, so a step can
+		// name the merchant and map that the block header splits apart again.
+		std::string MerchantLabel(const RecipeNode& aNode)
+		{
+			std::string label = aNode.MerchantName.empty() ? "Merchant" : aNode.MerchantName;
+			if (!aNode.MerchantLocations.empty())
+			{
+				label += " (" + aNode.MerchantLocations + ")";
+			}
+			return label;
 		}
 
 		std::string CurrencyPriceText(const PlanContext& aContext, int aCurrencyId, i64 aAmount)
@@ -340,6 +353,7 @@ namespace mc
 					node.Crafts = crafts;
 					if (node.Source == SourceKind::Vendor)
 					{
+						node.MerchantDetail = MerchantLabel(aNode);
 						AddVendorRow(aContext, node, aNode);
 					}
 				}
@@ -374,6 +388,7 @@ namespace mc
 				{
 					node.SourceDetail += " (" + aNode.MerchantLocations + ")";
 				}
+				node.MerchantDetail = MerchantLabel(aNode);
 				AddVendorRow(aContext, node, aNode);
 			}
 			else
@@ -417,31 +432,117 @@ namespace mc
 			return result;
 		}
 
-		// Research notes are a wallet currency earned by crafting and salvaging
-		// gear, so the plan can optionally price the notes it still needs.
+		// Research notes are a wallet currency earned by crafting at a crafting
+		// station, so the plan prices the notes it still needs from the cost of
+		// crafting the recipe that gets researched. The configured price per note
+		// is the fallback when no source recipe is available.
 		void ApplyResearchNotes(Plan& aPlan, PlanContext& aContext, i64 aRequired, i64 aFullRequired)
 		{
 			aPlan.ResearchNotesRequired = aRequired;
 			aPlan.ResearchNotesNeeded = aContext.CurrencyNeeded[kResearchNoteCurrency];
-			if (!aContext.Options.IncludeResearchNotes || aContext.Options.ResearchNoteUnitCost <= 0 || aPlan.ResearchNotesNeeded <= 0)
+			const i64 needed = aPlan.ResearchNotesNeeded;
+			if (!aContext.Options.IncludeResearchNotes || needed <= 0)
 			{
 				return;
 			}
 
-			const i64 cost = aPlan.ResearchNotesNeeded * aContext.Options.ResearchNoteUnitCost;
-			aPlan.ResearchNoteCost = cost;
-			aPlan.RemainingCost += cost;
-			aPlan.FullCost += aFullRequired * aContext.Options.ResearchNoteUnitCost;
+			// Every candidate source is costed for the notes still missing, and the
+			// one with the lowest cost per note wins.
+			PlanOptions sourceOptions = aContext.Options;
+			sourceOptions.IncludeResearchNotes = false;
+			sourceOptions.IncludeAccountItems = false;
+			sourceOptions.ResearchNoteSources = nullptr;
+
+			const RecipeNode* bestSource = nullptr;
+			Plan bestPlan;
+			int bestYield = 0;
+			i64 bestCrafts = 0;
+			i64 bestUnitCost = 0;
+			if (aContext.Options.ResearchNoteSources)
+			{
+				for (const RecipeNode& candidate : *aContext.Options.ResearchNoteSources)
+				{
+					if (candidate.Id == 0 || !candidate.IsRecipe())
+					{
+						continue;
+					}
+					auto info = aContext.Items.find(candidate.Id);
+					if (info == aContext.Items.end())
+					{
+						continue;
+					}
+
+					const int candidateYield = ResearchNoteYieldFor(info->second.Level, info->second.Rarity);
+					const i64 candidateCrafts = (needed + candidateYield - 1) / candidateYield;
+
+					// Notes only come from crafting the item at a station, so buying
+					// the finished item is never the route priced here.
+					std::map<int, Preference> sourcePreferences = aContext.Preferences;
+					sourcePreferences[candidate.Id] = Preference::Craft;
+
+					const Plan candidatePlan = BuildPlan(
+						candidate,
+						static_cast<int>(std::min<i64>(candidateCrafts, std::numeric_limits<int>::max())),
+						aContext.Items,
+						aContext.Prices,
+						aContext.Currencies,
+						AccountData{},
+						sourceOptions,
+						sourcePreferences);
+
+					if (candidatePlan.FullCost <= 0)
+					{
+						continue;
+					}
+					const i64 candidateUnit = candidatePlan.FullCost / (candidateCrafts * candidateYield);
+					if (bestSource == nullptr || candidateUnit < bestUnitCost)
+					{
+						bestSource = &candidate;
+						bestPlan = candidatePlan;
+						bestYield = candidateYield;
+						bestCrafts = candidateCrafts;
+						bestUnitCost = candidateUnit;
+					}
+				}
+			}
+
+			i64 unitCost = 0;
+			std::string sourceName;
+			std::vector<ShoppingItem> ingredients;
+			const bool priced = bestSource != nullptr;
+			if (priced)
+			{
+				sourceName = bestPlan.GoalName;
+				unitCost = bestPlan.FullCost / needed;
+				aPlan.ResearchNoteCost = bestPlan.FullCost;
+				aPlan.RemainingCost += bestPlan.FullCost;
+				aPlan.FullCost += (bestPlan.FullCost / std::max<i64>(1, bestCrafts)) * ((aFullRequired + bestYield - 1) / bestYield);
+				aPlan.ResearchNoteSourceName = sourceName;
+				aPlan.ResearchNoteYield = bestYield;
+				aPlan.ResearchNoteCrafts = static_cast<int>(std::min<i64>(bestCrafts, std::numeric_limits<int>::max()));
+				// The rows are flagged so the interface can mark them as being there
+				// only to produce research notes, and the craft itself joins the
+				// crafting steps so the checklist stays complete.
+				ingredients = bestPlan.Shopping;
+				for (auto& row : ingredients)
+				{
+					row.ResearchNotes = true;
+				}
+				aPlan.NoteRoots.push_back(bestPlan.Root);
+			}
 
 			ShoppingItem row;
 			row.Id = kResearchNoteCurrency;
 			row.Name = "Research Note";
-			row.Quantity = static_cast<int>(aPlan.ResearchNotesNeeded);
-			row.UnitCost = aContext.Options.ResearchNoteUnitCost;
-			row.TotalCost = cost;
+			row.Quantity = static_cast<int>(needed);
+			row.UnitCost = unitCost;
+			row.TotalCost = aPlan.ResearchNoteCost;
 			row.Source = SourceKind::Currency;
 			row.Currency = true;
-			row.SourceDetail = "Crafted and salvaged with a research kit";
+			row.ResearchNotes = true;
+			row.SourceDetail = priced
+				? "Crafted at a crafting station from " + sourceName + " (" + std::to_string(bestYield) + " notes per craft)"
+				: "Crafted at a crafting station and converted into research notes";
 			auto currency = aContext.Currencies.find(kResearchNoteCurrency);
 			if (currency != aContext.Currencies.end())
 			{
@@ -451,7 +552,14 @@ namespace mc
 				}
 				row.Icon = currency->second.Icon;
 			}
-			aContext.Shopping.push_back(std::move(row));
+
+			// The notes first, then the ingredients that produce them; both are
+			// appended after the list is aggregated so they stay on their own lines.
+			aPlan.Shopping.push_back(std::move(row));
+			for (auto& ingredient : ingredients)
+			{
+				aPlan.Shopping.push_back(std::move(ingredient));
+			}
 		}
 	}
 
@@ -538,8 +646,10 @@ namespace mc
 		const PlanNode fullRoot = BuildNode(fullContext, root, 0);
 		plan.FullCost = fullRoot.TotalCost;
 
-		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullContext.CurrencyRequired[kResearchNoteCurrency]);
 		plan.Shopping = AggregateShopping(context.Shopping);
+		// Research note lines are appended after aggregation so their own cost
+		// lines never merge with the ingredient they happen to share an id with.
+		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullContext.CurrencyRequired[kResearchNoteCurrency]);
 
 		return plan;
 	}
@@ -565,78 +675,329 @@ namespace mc
 			}
 		}
 
-		void CollectSteps(const PlanNode& aNode, std::vector<CraftStep>& aOut)
+		// The checklist keeps the work the player performs: crafts, Mystic Forge
+		// combines and the merchant purchases that cannot be crafted. Trading Post
+		// buying and wallet top-ups stay on the shopping list, since the checklist
+		// assumes those ingredients are already in the bag.
+		bool IsListedNode(const PlanNode& aNode)
 		{
-			if (aNode.Remaining <= 0)
+			switch (ActionForNode(aNode))
 			{
-				return;
+			case CraftAction::Craft:
+			case CraftAction::MysticForge:
+			case CraftAction::Vendor:
+				return true;
+			default:
+				return false;
 			}
+		}
 
-			// Coin is already counted in the gold totals, so it is not a separate step.
-			if (aNode.IsCurrency && aNode.Id == 1)
-			{
-				return;
-			}
-
-			// Sub-components are crafted or bought first, so the list is safe to follow top to bottom.
-			for (const auto& child : aNode.Children)
-			{
-				CollectSteps(child, aOut);
-			}
-
+		CraftStep StepForNode(const PlanNode& aNode, bool aForResearchNotes)
+		{
 			CraftStep step;
 			step.Id = aNode.Id;
 			step.Currency = aNode.IsCurrency;
 			step.Name = aNode.Name;
 			step.Icon = aNode.Icon;
 			step.ChatLink = aNode.ChatLink;
-			step.Detail = aNode.SourceDetail;
 			step.Action = ActionForNode(aNode);
 			step.Remaining = aNode.Remaining;
 			step.Owned = aNode.Owned;
 			step.Required = aNode.Required;
 			step.OutputPerCraft = aNode.Output;
+			step.ResearchNotes = aForResearchNotes;
 
-			// Buying from the Trading Post and gathering currency need no extra explanation.
-			if (step.Action == CraftAction::Buy || step.Action == CraftAction::Gather)
+			switch (step.Action)
 			{
-				step.Detail.clear();
-			}
-			// A recipe can be known by many disciplines; the first one is enough for a step.
-			else if (step.Action == CraftAction::Craft && !aNode.Discipline.empty())
-			{
-				step.Detail = aNode.Discipline;
-			}
-
-			const bool crafted = step.Action == CraftAction::Craft || step.Action == CraftAction::MysticForge || step.Action == CraftAction::Vendor;
-			step.Quantity = crafted && aNode.Crafts > 0 ? aNode.Crafts : aNode.Remaining;
-
-			if (step.Action == CraftAction::Buy || step.Action == CraftAction::Vendor)
-			{
+			case CraftAction::Vendor:
+				// A merchant line keeps the merchant, the map and the coin cost,
+				// so the block below it says who to visit and what it costs.
+				step.Detail = aNode.MerchantDetail.empty() ? aNode.SourceDetail : aNode.MerchantDetail;
+				step.Quantity = aNode.Remaining;
 				step.Cost = aNode.TotalCost;
+				break;
+			case CraftAction::Craft:
+				// A recipe can be known by many disciplines; the first is enough.
+				step.Detail = aNode.Discipline;
+				step.Quantity = aNode.Crafts > 0 ? aNode.Crafts : aNode.Remaining;
+				break;
+			default:
+				step.Quantity = aNode.Crafts > 0 ? aNode.Crafts : aNode.Remaining;
+				break;
 			}
 
-			aOut.push_back(std::move(step));
+			return step;
+		}
+
+		// Identifies one line of the checklist, so a craft that several goals need
+		// becomes a single line instead of one line per goal.
+		struct StepKey
+		{
+			int Id = 0;
+			int Action = 0;
+
+			bool operator<(const StepKey& aOther) const
+			{
+				return Id != aOther.Id ? Id < aOther.Id : Action < aOther.Action;
+			}
+		};
+
+		// Walks the plan tree and records, for every line, the lines that have to
+		// be done before it. The checklist is then ordered from those dependencies
+		// rather than from the shape of the walk, so an ingredient never lands
+		// after the item that consumes it - not even when the ingredient only has
+		// to be made for a later goal, because an earlier one used up the stock.
+		class StepCollector
+		{
+		public:
+			std::vector<CraftStep> Collect(const Plan& aPlan)
+			{
+				// Research notes are an ingredient of the goal, so the crafts that
+				// produce them come before the goal's own work.
+				for (const auto& noteRoot : aPlan.NoteRoots)
+				{
+					CollectNode(noteRoot, true);
+				}
+				if (!aPlan.GoalRoots.empty())
+				{
+					for (const auto& goal : aPlan.GoalRoots)
+					{
+						CollectNode(goal, false);
+					}
+				}
+				else
+				{
+					CollectNode(aPlan.Root, false);
+				}
+				return Order();
+			}
+
+		private:
+			struct Entry
+			{
+				CraftStep Step;
+				std::vector<StepKey> Dependencies;
+			};
+
+			std::vector<Entry> Entries;
+			std::map<StepKey, std::size_t> Positions;
+
+			static void AddKey(std::vector<StepKey>& aKeys, const StepKey& aKey)
+			{
+				for (const StepKey& key : aKeys)
+				{
+					if (!(key < aKey) && !(aKey < key))
+					{
+						return;
+					}
+				}
+				aKeys.push_back(aKey);
+			}
+
+			// Returns every line this node needs, which is what its parent has to wait
+			// for. A node the checklist does not list passes its children's lines up.
+			std::vector<StepKey> CollectNode(const PlanNode& aNode, bool aForResearchNotes)
+			{
+				if (aNode.Remaining <= 0)
+				{
+					return {};
+				}
+
+				std::vector<StepKey> provided;
+				for (const auto& child : aNode.Children)
+				{
+					for (const StepKey& key : CollectNode(child, aForResearchNotes))
+					{
+						AddKey(provided, key);
+					}
+				}
+
+				if (!IsListedNode(aNode))
+				{
+					return provided;
+				}
+
+				const StepKey key{aNode.Id, static_cast<int>(ActionForNode(aNode))};
+				const CraftStep step = StepForNode(aNode, aForResearchNotes);
+				auto found = Positions.find(key);
+				if (found == Positions.end())
+				{
+					Positions[key] = Entries.size();
+					Entry entry;
+					entry.Step = step;
+					entry.Dependencies = provided;
+					Entries.push_back(std::move(entry));
+				}
+				else
+				{
+					// The same craft can be needed by more than one goal: it is listed
+					// once, with the amounts and the dependencies added together.
+					Entry& entry = Entries[found->second];
+					entry.Step.Quantity += step.Quantity;
+					entry.Step.Remaining += step.Remaining;
+					entry.Step.Required += step.Required;
+					entry.Step.Owned += step.Owned;
+					entry.Step.Cost += step.Cost;
+					entry.Step.ResearchNotes = entry.Step.ResearchNotes && step.ResearchNotes;
+					for (const StepKey& dependency : provided)
+					{
+						AddKey(entry.Dependencies, dependency);
+					}
+				}
+
+				AddKey(provided, key);
+				return provided;
+			}
+
+			// Dependency order: a line comes out once every line it needs is out.
+			// Among the lines that are ready, the plan's own order wins, so the walk
+			// above still decides the sequence wherever dependencies allow it.
+			std::vector<CraftStep> Order() const
+			{
+				const std::size_t count = Entries.size();
+				std::vector<int> waiting(count, 0);
+				std::vector<std::vector<std::size_t>> dependents(count);
+				for (std::size_t i = 0; i < count; ++i)
+				{
+					for (const StepKey& dependency : Entries[i].Dependencies)
+					{
+						auto found = Positions.find(dependency);
+						if (found == Positions.end() || found->second == i)
+						{
+							continue;
+						}
+						++waiting[i];
+						dependents[found->second].push_back(i);
+					}
+				}
+
+				std::priority_queue<std::size_t, std::vector<std::size_t>, std::greater<std::size_t>> ready;
+				for (std::size_t i = 0; i < count; ++i)
+				{
+					if (waiting[i] == 0)
+					{
+						ready.push(i);
+					}
+				}
+
+				std::vector<CraftStep> steps;
+				steps.reserve(count);
+				std::vector<bool> emitted(count, false);
+				while (!ready.empty())
+				{
+					const std::size_t index = ready.top();
+					ready.pop();
+					steps.push_back(Entries[index].Step);
+					emitted[index] = true;
+					for (std::size_t dependent : dependents[index])
+					{
+						if (--waiting[dependent] == 0)
+						{
+							ready.push(dependent);
+						}
+					}
+				}
+
+				// A dependency loop would leave lines behind: they are kept at the end
+				// in plan order rather than dropped.
+				for (std::size_t i = 0; i < count; ++i)
+				{
+					if (!emitted[i])
+					{
+						steps.push_back(Entries[i].Step);
+					}
+				}
+				return steps;
+			}
+		};
+	}
+
+	// Linearizes a plan into dependency-ordered steps: every ingredient is listed
+	// before the item that consumes it, and a combined plan closes with the goal
+	// crafts. A craft that several goals need becomes one line with the summed
+	// amount, placed where its own ingredients allow it.
+	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan)
+	{
+		return StepCollector().Collect(aPlan);
+	}
+
+	// Splits a place label like "Rojan the Penitent (Lions Arch)" into the
+	// merchant and the location text that follows it.
+	void SplitPlaceDetail(const std::string& aDetail, std::string& aPlace, std::string& aWhere)
+	{
+		const std::size_t open = aDetail.rfind(" (");
+		if (open == std::string::npos || aDetail.back() != ')')
+		{
+			aPlace = aDetail;
+			aWhere.clear();
+			return;
+		}
+		aPlace = aDetail.substr(0, open);
+		aWhere = aDetail.substr(open + 2, aDetail.size() - open - 3);
+	}
+
+	std::string StepGroupKey(const CraftStep& aStep)
+	{
+		switch (aStep.Action)
+		{
+		case CraftAction::Vendor:
+		{
+			std::string place;
+			std::string where;
+			SplitPlaceDetail(aStep.Detail, place, where);
+			return "vendor:" + (place.empty() ? std::string("Merchant") : place);
+		}
+		case CraftAction::MysticForge:
+			return "forge";
+		default:
+			return "craft:" + (aStep.Detail.empty() ? std::string("Crafting station") : aStep.Detail);
 		}
 	}
 
-	// Linearizes a plan into dependency-ordered actions: ingredients first, the
-	// goal last. A combined plan lists the steps of every tracked goal in turn.
-	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan)
+	// Groups consecutive steps that happen in the same place, so the list keeps
+	// dependency order while a run of work at one merchant, station or forge
+	// reads as one visit. A place used again later gets its own block again.
+	std::vector<CraftStepGroup> BuildStepGroups(const Plan& aPlan)
 	{
-		std::vector<CraftStep> steps;
-		if (!aPlan.GoalRoots.empty())
+		const std::vector<CraftStep> steps = BuildCraftingSteps(aPlan);
+		std::vector<CraftStepGroup> groups;
+		std::string lastKey;
+
+		for (const auto& step : steps)
 		{
-			for (const auto& goal : aPlan.GoalRoots)
+			const std::string key = StepGroupKey(step);
+			if (groups.empty() || key != lastKey)
 			{
-				CollectSteps(goal, steps);
+				CraftStepGroup group;
+				group.Action = step.Action;
+				group.ResearchNotes = step.ResearchNotes;
+				if (step.Action == CraftAction::Vendor)
+				{
+					std::string place;
+					SplitPlaceDetail(step.Detail, place, group.Detail);
+					group.Title = place.empty() ? "Merchant" : place;
+				}
+				else if (step.Action == CraftAction::MysticForge)
+				{
+					group.Title = "Mystic Forge";
+					group.Detail = "Combine the ingredients in the Mystic Forge";
+				}
+				else
+				{
+					group.Title = step.Detail.empty() ? "Crafting station" : step.Detail;
+					group.Detail = "Craft at the " + group.Title + " station";
+				}
+				groups.push_back(std::move(group));
+				lastKey = key;
 			}
+
+			CraftStepGroup& group = groups.back();
+			group.Cost += step.Cost;
+			group.ResearchNotes = group.ResearchNotes && step.ResearchNotes;
+			group.Steps.push_back(step);
 		}
-		else
-		{
-			CollectSteps(aPlan.Root, steps);
-		}
-		return steps;
+
+		return groups;
 	}
 
 	Plan BuildCombinedPlan(
@@ -673,6 +1034,16 @@ namespace mc
 			combined.ResearchNotesRequired += plan.ResearchNotesRequired;
 			combined.ResearchNotesNeeded += plan.ResearchNotesNeeded;
 			combined.ResearchNoteCost += plan.ResearchNoteCost;
+			if (combined.ResearchNoteSourceName.empty() && !plan.ResearchNoteSourceName.empty())
+			{
+				combined.ResearchNoteSourceName = plan.ResearchNoteSourceName;
+				combined.ResearchNoteYield = plan.ResearchNoteYield;
+			}
+			combined.ResearchNoteCrafts += plan.ResearchNoteCrafts;
+			for (const auto& noteRoot : plan.NoteRoots)
+			{
+				combined.NoteRoots.push_back(noteRoot);
+			}
 			combined.GoalRoots.push_back(plan.Root);
 			entries.insert(entries.end(), plan.Shopping.begin(), plan.Shopping.end());
 			if (!plan.GoalName.empty())

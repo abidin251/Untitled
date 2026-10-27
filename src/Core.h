@@ -14,6 +14,15 @@ namespace mc
 	constexpr int kCoinCurrency = 1;
 	constexpr int kResearchNoteCurrency = 61;
 
+	// Crafted items that are cheap to make and are researched into notes: fine,
+	// masterwork, rare and exotic pieces. The planner prices every one of them
+	// and keeps the cheapest per note.
+	const std::vector<int>& ResearchNoteSourceCandidates();
+
+	// Notes a research kit returns for an item of this level and rarity: five for
+	// a level-80 exotic, fewer for lower levels and rarities.
+	int ResearchNoteYieldFor(int aLevel, const std::string& aRarity);
+
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
 	std::string Join(const std::vector<std::string>& aValues, const char* aSeparator);
@@ -124,7 +133,9 @@ namespace mc
 		bool IncludeAccountItems = true;
 		bool ShowCompleted = true;
 		bool IncludeResearchNotes = false;   // price the research notes a plan needs
-		i64 ResearchNoteUnitCost = 100;      // estimated coin cost of one research note
+		// Crafted items whose craft can be turned into research notes; the plan
+		// prices each of them and charges the cheapest one per note.
+		const std::vector<RecipeNode>* ResearchNoteSources = nullptr;
 		int MaxDepth = 48;
 		int MaxNodes = 25000;
 	};
@@ -144,6 +155,7 @@ namespace mc
 		std::string TotalPriceText;   // the same price for the whole quantity
 		bool FromVendor = false;      // a merchant sells it
 		bool FromTradingPost = false; // the Trading Post sells it
+		bool ResearchNotes = false;   // a line that exists to produce research notes
 	};
 
 	struct PlanNode
@@ -162,6 +174,7 @@ namespace mc
 		double Output = 1.0;
 		SourceKind Source = SourceKind::Unknown;
 		std::string SourceDetail;
+		std::string MerchantDetail; // clean "merchant (map)" for a vendor purchase
 		std::string Discipline;
 		i64 UnitCost = 0;
 		i64 TotalCost = 0;
@@ -190,9 +203,13 @@ namespace mc
 		std::map<int, i64> CurrencyNeeded;   // amount still missing after the wallet
 		std::map<int, i64> CurrencyOwned;
 		std::vector<PlanNode> GoalRoots;      // one tree per tracked goal in a combined plan
+		std::vector<PlanNode> NoteRoots;      // trees crafted to produce the research notes
 		i64 ResearchNotesRequired = 0;
 		i64 ResearchNotesNeeded = 0;
 		i64 ResearchNoteCost = 0;             // coin added for the missing research notes
+		std::string ResearchNoteSourceName;   // item whose craft produces the notes
+		int ResearchNoteYield = 0;            // notes per craft of that item
+		int ResearchNoteCrafts = 0;           // crafts the missing notes need
 		int NodeCount = 0;
 		int GoalCount = 1;                    // >1 for a combined tracked plan
 		bool Complete = false;
@@ -238,6 +255,20 @@ namespace mc
 		int Required = 0;
 		double OutputPerCraft = 1.0;
 		i64 Cost = 0;            // purchases and vendor costs; 0 for crafts and currencies
+		bool ResearchNotes = false; // the step exists to produce research notes
+	};
+
+	// Steps that belong to the same place to go, in first-appearance order: one
+	// merchant, one crafting station, the Trading Post, the wallet. Each group
+	// keeps its steps in dependency order and carries its combined coin cost.
+	struct CraftStepGroup
+	{
+		std::string Title;       // merchant name, discipline, "Trading Post", ...
+		std::string Detail;      // map, location or what happens there
+		CraftAction Action = CraftAction::Craft;
+		i64 Cost = 0;
+		bool ResearchNotes = false; // every step in the group exists for research notes
+		std::vector<CraftStep> Steps;
 	};
 
 	struct CatalogEntry

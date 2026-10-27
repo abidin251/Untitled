@@ -97,6 +97,9 @@ namespace mc
 	private:
 		void ReloadCatalogJob();
 		bool LoadRecipeTree(int aItemId, bool aForce, const UserSettings& aSettings, RecipeNode& aRoot, std::string& aError, std::string& aWarning);
+		// Loads the recipes whose crafts become research notes and appends their
+		// item ids to the fetch list. False means the notes cannot be priced.
+		bool LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut);
 		void LoadPlanJob(int aItemId, bool aForce, const UserSettings& aSettings);
 		void BuildTrackedPlanJob(const UserSettings& aSettings);
 		void SyncAccountJob(const UserSettings& aSettings, int aGoalId);

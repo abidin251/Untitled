@@ -13,6 +13,64 @@ namespace mc
 		return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 	}
 
+	// Crafted equipment that the research kit turns into notes, one cheap batch
+	// per rarity so a plan is never left choosing between exotic gear alone:
+	// fine, masterwork, rare and exotic pieces, 90 in all. The ids were picked
+	// from the live market as the cheapest craft per note of their rarity (level
+	// 60 and up), and the planner re-prices every one of them against the prices
+	// in force when the plan runs, keeping whichever is cheapest per note.
+	const std::vector<int>& ResearchNoteSourceCandidates()
+	{
+		static const std::vector<int> candidates = {
+			// Fine - cheap level 70-75 gear (cheapest: Carrion Barbaric Helm).
+			10675, 10676, 13996, 14503, 14552, 13997, 14497, 14546, 10673, 10500,
+			10570, 10605, 13999, 14498, 14547, 13912, 13961, 13913, 13962, 10501,
+			// Masterwork - level-80 jewellery and level-70 gear (cheapest: Beryl
+			// Mithril Earring).
+			13448, 41451, 13446, 45926, 13395, 36784, 41455, 13406, 45913, 13445,
+			13442, 13443, 13447, 13479, 36751, 41447, 13490, 45939, 13403, 13393,
+			// Rare - level-80 weapons (cheapest: Carrion Krait Trident).
+			14008, 14511, 14560, 13924, 13973, 15388, 38153, 14013, 14516, 14565,
+			13889, 14595, 15346, 15423, 15507, 15549, 13929, 13978, 15393, 15262,
+			// Exotic - the Draconic and Emblazoned level-80 sets (cheapest: Rabid
+			// Draconic Gauntlets).
+			48601, 48615, 48580, 48594, 48699, 48622, 48587, 48602, 48657, 48616,
+			48650, 48581, 48595, 48700, 48608, 48623, 48588, 48658, 48643, 48651,
+			48607, 48621, 48586, 48600, 48705, 48609, 48644, 48628, 48678, 48593
+		};
+		return candidates;
+	}
+
+	// A research kit returns more notes from the same craft the higher its level
+	// and the rarer the item: a level-80 exotic gives five, a masterwork two, a
+	// fine piece one. Below level 60 anything gives a single note, and short of
+	// level 80 the rarity's number drops by one.
+	int ResearchNoteYieldFor(int aLevel, const std::string& aRarity)
+	{
+		int notes = 1; // fine and below
+		if (aRarity == "Exotic")
+		{
+			notes = 5;
+		}
+		else if (aRarity == "Rare")
+		{
+			notes = 3;
+		}
+		else if (aRarity == "Masterwork")
+		{
+			notes = 2;
+		}
+		if (aLevel < 60)
+		{
+			return 1;
+		}
+		if (aLevel < 80)
+		{
+			notes = std::max(1, notes - 1);
+		}
+		return notes;
+	}
+
 	std::string ToLower(std::string aValue)
 	{
 		std::transform(aValue.begin(), aValue.end(), aValue.begin(), [](unsigned char c) {

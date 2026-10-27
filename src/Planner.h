@@ -23,6 +23,10 @@ namespace mc
 	// lists the steps of every tracked goal it was built from.
 	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan);
 
+	// Groups those steps by where they happen, so one merchant, one crafting
+	// station or one Trading Post visit becomes a single block of work.
+	std::vector<CraftStepGroup> BuildStepGroups(const Plan& aPlan);
+
 	// Builds one plan per goal against a shared ownership pool, then merges the
 	// shopping lists and currency requirements into a single plan. Owned items
 	// are consumed in goal order so shared materials are never counted twice.

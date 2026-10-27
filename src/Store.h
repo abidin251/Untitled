@@ -24,7 +24,6 @@ namespace mc
 		bool WindowVisible = false;
 		bool CombineTracked = true;
 		bool IncludeResearchNotes = false;
-		int ResearchNoteCost = 100; // estimated copper cost of one research note
 		int SelectedItem = 0;
 		std::string RecipeBase = "https://api.gw2efficiency.com";
 		std::vector<int> Tracked;

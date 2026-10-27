@@ -554,6 +554,36 @@ namespace mc
 		return false;
 	}
 
+	// Research notes are produced by crafting an item at a station and letting
+	// the craft convert into notes, so the plan prices them from the ingredients
+	// of that craft. Every cheap candidate is loaded so the planner can keep
+	// whichever turns out to be the cheapest per note.
+	bool App::LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut)
+	{
+		if (!aSettings.IncludeResearchNotes)
+		{
+			return false;
+		}
+
+		for (int id : ResearchNoteSourceCandidates())
+		{
+			std::string error;
+			std::string warning;
+			RecipeNode node;
+			if (!LoadRecipeTree(id, false, aSettings, node, error, warning) || !node.IsRecipe())
+			{
+				// A candidate without a usable recipe simply cannot be a source.
+				continue;
+			}
+
+			const std::vector<int> ids = CollectRecipeItemIds(node);
+			aItemIds.insert(aItemIds.end(), ids.begin(), ids.end());
+			aOut.push_back(std::move(node));
+		}
+
+		return !aOut.empty();
+	}
+
 	void App::RefreshTrackedShopping()
 	{
 		const UserSettings snapshot = Settings;
@@ -597,6 +627,9 @@ namespace mc
 			itemIds.insert(itemIds.end(), ids.begin(), ids.end());
 		}
 
+		std::vector<RecipeNode> researchSources;
+		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources);
+
 		std::string dependencyError;
 		EnsureCurrencies(dependencyError);
 		EnsureItems(itemIds, dependencyError);
@@ -622,7 +655,10 @@ namespace mc
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
-		options.ResearchNoteUnitCost = aSettings.ResearchNoteCost;
+		if (hasResearchSources)
+		{
+			options.ResearchNoteSources = &researchSources;
+		}
 
 		std::map<int, Preference> preferences;
 		for (const auto& pair : aSettings.Preferences)
@@ -656,7 +692,9 @@ namespace mc
 		}
 
 		std::string dependencyError;
-		const std::vector<int> itemIds = CollectRecipeItemIds(root);
+		std::vector<int> itemIds = CollectRecipeItemIds(root);
+		std::vector<RecipeNode> researchSources;
+		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources);
 		EnsureCurrencies(dependencyError);
 		EnsureItems(itemIds, dependencyError);
 		EnsurePrices(itemIds, dependencyError);
@@ -681,7 +719,10 @@ namespace mc
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
-		options.ResearchNoteUnitCost = aSettings.ResearchNoteCost;
+		if (hasResearchSources)
+		{
+			options.ResearchNoteSources = &researchSources;
+		}
 
 		std::map<int, Preference> preferences;
 		for (const auto& pair : aSettings.Preferences)
@@ -1057,7 +1098,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 3, 0, 0 };
+	g_Definition.Version = { 1, 7, 0, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;

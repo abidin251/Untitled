@@ -321,12 +321,8 @@ namespace
 		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
 		const std::vector<CraftStep> steps = BuildCraftingSteps(plan);
 
-		Check(steps.size() == 3, "steps list ingredients first and skips coin");
-		Check(steps[0].Action == CraftAction::Buy && steps[0].Id == 1, "a tradable ingredient becomes a buy step");
-		Check(steps[0].Remaining == 2 && steps[0].Cost == 200, "buy step reports quantity and cost");
-		Check(steps[1].Action == CraftAction::Gather && steps[1].Id == 2, "a currency ingredient becomes a gather step");
-		Check(steps[1].Remaining == 100, "gather step reports the missing amount");
-		Check(steps[2].Action == CraftAction::Craft && steps[2].Quantity == 1, "the goal craft is the last step");
+		Check(steps.size() == 1, "only crafts are listed, purchases are left to the shopping list");
+		Check(steps[0].Action == CraftAction::Craft && steps[0].Quantity == 1, "the goal craft is the step");
 
 		AccountData owned;
 		owned.Valid = true;
@@ -372,11 +368,9 @@ namespace
 		Check(combined.GoalRoots.size() == 2, "a combined plan keeps one tree per tracked goal");
 
 		const std::vector<CraftStep> steps = BuildCraftingSteps(combined);
-		Check(steps.size() == 4, "crafting steps cover every tracked goal");
-		Check(steps[0].Action == CraftAction::Buy && steps[0].Remaining == 2, "the first goal ingredient comes first");
-		Check(steps[1].Action == CraftAction::Craft && steps[1].Name == "Sword", "the first goal craft follows its ingredient");
-		Check(steps[2].Action == CraftAction::Buy && steps[2].Remaining == 1, "the second goal ingredient follows");
-		Check(steps[3].Action == CraftAction::Craft && steps[3].Name == "Staff", "the second goal craft is last");
+		Check(steps.size() == 2, "crafting steps cover every tracked goal");
+		Check(steps[0].Action == CraftAction::Craft && steps[0].Name == "Sword", "the first goal craft comes first");
+		Check(steps[1].Action == CraftAction::Craft && steps[1].Name == "Staff", "the second goal craft follows");
 	}
 
 	void TestVendorIngredients()
@@ -512,13 +506,12 @@ namespace
 
 		PlanOptions options;
 		options.IncludeResearchNotes = true;
-		options.ResearchNoteUnitCost = 100; // one silver per note
 		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
 
 		Check(plan.ResearchNotesRequired == 250 && plan.ResearchNotesNeeded == 250, "the plan reports the research notes it needs");
-		Check(plan.ResearchNoteCost == 25000, "research notes are priced at the configured cost");
-		Check(plan.RemainingCost == 25200, "the note cost is part of the remaining cost");
-		Check(plan.FullCost == 25200, "the note cost is part of the from-scratch cost");
+		Check(plan.ResearchNoteCost == 0, "notes without a priced craft cost nothing");
+		Check(plan.RemainingCost == 200, "unpriced notes add no gold cost");
+		Check(plan.FullCost == 200, "unpriced notes add no from-scratch cost");
 
 		bool found = false;
 		for (const auto& entry : plan.Shopping)
@@ -529,7 +522,7 @@ namespace
 			}
 			found = true;
 			Check(entry.Currency && entry.Source == SourceKind::Currency, "research notes are listed as a wallet currency line");
-			Check(entry.Name == "Research Note" && entry.Quantity == 250 && entry.TotalCost == 25000, "the note line carries the priced quantity");
+			Check(entry.Name == "Research Note" && entry.Quantity == 250 && entry.TotalCost == 0, "the note line carries the quantity without a price");
 		}
 		Check(found, "research notes appear on the shopping list");
 
@@ -538,14 +531,336 @@ namespace
 		account.Valid = true;
 		account.Currencies[kResearchNoteCurrency] = 50;
 		const Plan partlyOwned = BuildPlan(root, 1, items, prices, currencies, account, options, {});
-		Check(partlyOwned.ResearchNotesNeeded == 200 && partlyOwned.ResearchNoteCost == 20000, "only the missing notes are priced");
-		Check(partlyOwned.RemainingCost == 20200, "owned notes reduce the remaining cost");
+		Check(partlyOwned.ResearchNotesNeeded == 200, "owned notes reduce the missing notes");
 
 		// With the option off the notes are still reported, just not priced.
 		options.IncludeResearchNotes = false;
 		const Plan unpriced = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
 		Check(unpriced.ResearchNotesRequired == 250 && unpriced.ResearchNoteCost == 0, "notes are reported but not priced when the option is off");
 		Check(unpriced.RemainingCost == 200, "unpriced notes add no gold cost");
+	}
+
+	// Research notes are earned by crafting the source item at a station, so the
+	// plan prices the missing notes from that craft's ingredients.
+	void TestResearchNotesFromSourceRecipe()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Cured Leather";
+		items[100].Id = 100;
+		items[100].Name = "Obsidian Armor";
+		items[48601].Id = 48601;
+		items[48601].Name = "Rabid Draconic Gauntlets";
+		items[48601].Rarity = "Exotic";
+		items[48601].Level = 80;
+
+		CurrencyDb currencies;
+		currencies[kResearchNoteCurrency].Id = kResearchNoteCurrency;
+		currencies[kResearchNoteCurrency].Name = "Research Note";
+
+		// The finished item sells on the Trading Post, but notes only come from
+		// crafting it, so the craft price is the one that must be used.
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+		prices[48601].Id = 48601;
+		prices[48601].Sell = 500;
+
+		RecipeNode notes;
+		notes.Id = kResearchNoteCurrency;
+		notes.Type = "Currency";
+		notes.Quantity = 250;
+
+		const RecipeNode root = Recipe(100, 1, 1, { notes }, "Armorsmith");
+		const RecipeNode source = Recipe(48601, 1, 1, { ItemNode(1, 10) }, "Leatherworker");
+
+		std::vector<RecipeNode> sources = { source };
+		PlanOptions options;
+		options.IncludeResearchNotes = true;
+		options.ResearchNoteSources = &sources;
+
+		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+
+		// 250 notes need 50 crafts of 10 leather at 1s each: 50 gold, 20s per note.
+		Check(plan.ResearchNotesRequired == 250 && plan.ResearchNotesNeeded == 250, "the source recipe prices the notes the plan needs");
+		Check(plan.ResearchNoteCrafts == 50 && plan.ResearchNoteYield == 5, "the plan reports the crafts and the yield");
+		Check(plan.ResearchNoteSourceName == "Rabid Draconic Gauntlets", "the source item is named in the plan");
+		Check(plan.ResearchNoteCost == 50000, "the note cost is the ingredient cost of the source recipe, not the Trading Post price");
+		Check(plan.RemainingCost == 50000, "the note cost is part of the remaining cost");
+
+		bool foundNotes = false;
+		bool foundIngredients = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			if (entry.Id == kResearchNoteCurrency)
+			{
+				foundNotes = true;
+				Check(entry.UnitCost == 200 && entry.TotalCost == 50000, "the note line carries the per-note ingredient cost");
+				Check(entry.SourceDetail.find("Rabid Draconic Gauntlets") != std::string::npos, "the note line names the item it is crafted from");
+			}
+			if (entry.Id == 1)
+			{
+				foundIngredients = true;
+				Check(entry.Quantity == 500 && entry.TotalCost == 50000, "the source ingredients are listed for the whole batch");
+				Check(entry.ResearchNotes, "the source ingredients are marked as being for research notes");
+			}
+		}
+		Check(foundNotes, "the priced notes appear on the shopping list");
+		Check(foundIngredients, "the ingredients that produce the notes appear on the shopping list");
+
+		// The craft that turns into the notes is part of the work to do, flagged so
+		// the interface can label it, and grouped with the station it happens at.
+		const std::vector<CraftStep> steps = BuildCraftingSteps(plan);
+		bool foundSourceCraft = false;
+		int flagged = 0;
+		for (const auto& step : steps)
+		{
+			flagged += step.ResearchNotes ? 1 : 0;
+			Check(step.Action == CraftAction::Craft || step.Action == CraftAction::MysticForge, "purchases are not part of the crafting steps");
+			if (step.Action == CraftAction::Craft && step.Name == "Rabid Draconic Gauntlets")
+			{
+				foundSourceCraft = step.ResearchNotes && step.Quantity == 50;
+			}
+		}
+		Check(foundSourceCraft, "the source craft joins the crafting steps");
+		Check(flagged == 1, "only the research note craft is flagged");
+
+		const std::vector<CraftStepGroup> groups = BuildStepGroups(plan);
+		bool foundNoteStation = false;
+		for (const auto& group : groups)
+		{
+			if (group.Title == "Leatherworker")
+			{
+				foundNoteStation = group.ResearchNotes && group.Steps.size() == 1;
+			}
+			if (group.Title == "Armorsmith")
+			{
+				Check(!group.ResearchNotes, "a station group that also crafts the goal is not marked as notes only");
+			}
+		}
+		Check(foundNoteStation, "the note craft gets its own station group");
+
+		// Two candidate crafts: the cheapest one per note wins.
+		items[48602].Id = 48602;
+		items[48602].Name = "Dire Draconic Gauntlets";
+		items[48602].Rarity = "Exotic";
+		items[48602].Level = 80;
+		const RecipeNode cheaper = Recipe(48602, 1, 1, { ItemNode(1, 4) }, "Leatherworker");
+		sources.push_back(cheaper);
+		const Plan cheapest = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(cheapest.ResearchNoteSourceName == "Dire Draconic Gauntlets", "the cheapest source per note is picked automatically");
+		Check(cheapest.ResearchNoteCost == 20000, "the notes are charged at the cheapest source's ingredient cost");
+
+		// Notes already in the wallet only pay for the crafts still needed.
+		AccountData account;
+		account.Valid = true;
+		account.Currencies[kResearchNoteCurrency] = 50;
+		const Plan partlyOwned = BuildPlan(root, 1, items, prices, currencies, account, options, {});
+		Check(partlyOwned.ResearchNotesNeeded == 200 && partlyOwned.ResearchNoteCrafts == 40, "owned notes reduce the crafts needed");
+		Check(partlyOwned.ResearchNoteCost == 16000, "only the missing notes are priced");
+
+		// Without a candidate source the notes are listed without a price.
+		PlanOptions fallback;
+		fallback.IncludeResearchNotes = true;
+		const Plan flat = BuildPlan(root, 1, items, prices, currencies, {}, fallback, {});
+		Check(flat.ResearchNoteCost == 0 && flat.ResearchNoteSourceName.empty(), "notes stay unpriced when no source recipe is available");
+	}
+
+	// Fine gear is a research note source in its own right: fewer notes per
+	// craft, but a cheap craft can still beat an exotic source per note.
+	void TestCheapFineSourceBeatsExotic()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Scrap";
+		items[100].Id = 100;
+		items[100].Name = "Obsidian Armor";
+		items[200].Id = 200;
+		items[200].Name = "Draconic Gauntlets";
+		items[200].Rarity = "Exotic";
+		items[200].Level = 80;
+		items[300].Id = 300;
+		items[300].Name = "Barbaric Helm";
+		items[300].Rarity = "Fine";
+		items[300].Level = 70;
+
+		CurrencyDb currencies;
+		currencies[kResearchNoteCurrency].Id = kResearchNoteCurrency;
+		currencies[kResearchNoteCurrency].Name = "Research Note";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		RecipeNode notes;
+		notes.Id = kResearchNoteCurrency;
+		notes.Type = "Currency";
+		notes.Quantity = 20;
+
+		const RecipeNode root = Recipe(100, 1, 1, { notes }, "Armorsmith");
+		// The exotic gives five notes per craft at 10s of materials: 2s a note.
+		const RecipeNode exotic = Recipe(200, 1, 1, { ItemNode(1, 10) }, "Leatherworker");
+		// The fine piece gives one note per craft at 1s of materials: 1s a note,
+		// so it wins even though a craft yields fewer notes.
+		const RecipeNode fine = Recipe(300, 1, 1, { ItemNode(1, 1) }, "Armorsmith");
+
+		std::vector<RecipeNode> sources = { exotic, fine };
+		PlanOptions options;
+		options.IncludeResearchNotes = true;
+		options.ResearchNoteSources = &sources;
+
+		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(plan.ResearchNotesNeeded == 20, "the plan prices the notes it needs");
+		Check(plan.ResearchNoteYield == 1, "a fine-rarity source is priced at one note per craft");
+		Check(plan.ResearchNoteSourceName == "Barbaric Helm", "the cheaper fine source beats the exotic one");
+		Check(plan.ResearchNoteCrafts == 20, "a fine source needs one craft per note");
+		Check(plan.ResearchNoteCost == 2000, "the fine source is charged at its own ingredient cost");
+	}
+
+	void TestStepGroups()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Ore";
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[101].Id = 101;
+		items[101].Name = "Staff";
+		items[200].Id = 200;
+		items[200].Name = "Ingot";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// Both crafts happen at the same station, so they collapse into one block
+		// that keeps dependency order.
+		const RecipeNode ingot = Recipe(200, 2, 1, { ItemNode(1, 2) }, "Weaponsmith");
+		const RecipeNode root = Recipe(100, 1, 1, { ingot, ItemNode(1, 4) }, "Weaponsmith");
+		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
+
+		const std::vector<CraftStepGroup> groups = BuildStepGroups(plan);
+		Check(groups.size() == 1, "crafts at the same station become a single group");
+		if (groups.size() == 1)
+		{
+			Check(groups[0].Title == "Weaponsmith" && groups[0].Action == CraftAction::Craft, "the block is named after the discipline");
+			Check(groups[0].Steps.size() == 2, "both crafts are in the same block");
+			Check(groups[0].Steps[0].Name == "Ingot" && groups[0].Steps[1].Name == "Gift", "the block keeps dependency order");
+			Check(groups[0].Steps[0].Quantity == 2, "an ingredient craft reports its crafts");
+		}
+
+		// The Mystic Forge is its own block, even inside a crafted plan.
+		const RecipeNode forge = Recipe(201, 1, 1, { ItemNode(1, 1) }, "Mystic Forge");
+		const RecipeNode mixed = Recipe(101, 1, 1, { forge }, "Artificer");
+		const Plan mixedPlan = BuildPlan(mixed, 1, items, prices, {}, {}, options, {});
+		const std::vector<CraftStepGroup> mixedGroups = BuildStepGroups(mixedPlan);
+		Check(mixedGroups.size() == 2, "the Mystic Forge becomes its own block");
+		if (mixedGroups.size() == 2)
+		{
+			Check(mixedGroups[0].Title == "Mystic Forge" && mixedGroups[0].Action == CraftAction::MysticForge, "the forge block comes first when it is needed first");
+			Check(mixedGroups[1].Title == "Artificer" && mixedGroups[1].Steps.size() == 1, "the station block follows");
+		}
+
+		// A craft both tracked goals need is listed once with the summed crafts.
+		const RecipeNode shared = Recipe(200, 1, 1, { ItemNode(1, 1) }, "Weaponsmith");
+		const std::vector<RecipeNode> roots = {
+			Recipe(100, 1, 1, { shared }, "Weaponsmith"),
+			Recipe(101, 1, 1, { shared }, "Weaponsmith")
+		};
+		const Plan combined = BuildCombinedPlan(roots, items, prices, {}, {}, options, {});
+		const std::vector<CraftStep> combinedSteps = BuildCraftingSteps(combined);
+		Check(combinedSteps.size() == 3, "a craft shared by two goals becomes one step");
+		if (combinedSteps.size() == 3)
+		{
+			Check(combinedSteps[0].Name == "Ingot" && combinedSteps[0].Quantity == 2, "the repeated craft is combined");
+			Check(combinedSteps[1].Name == "Gift" && combinedSteps[2].Name == "Staff", "the goal crafts follow");
+		}
+		const std::vector<CraftStepGroup> combinedGroups = BuildStepGroups(combined);
+		Check(combinedGroups.size() == 1 && combinedGroups[0].Steps.size() == 3, "shared work stays in one station block");
+
+		// Merchant purchases belong to the checklist and keep their place in the
+		// order, with the merchant, the map and the cost preserved.
+		CurrencyDb currencies;
+		currencies[1].Id = 1;
+		currencies[1].Name = "Coin";
+		const RecipeNode icy = MerchantRecipe(202, 2, 1, 10000, "Rojan the Penitent", "Earthshake Basin, Frostgorge Sound");
+		const RecipeNode rune = MerchantRecipe(203, 1, 1, 30000, "Rojan the Penitent", "Earthshake Basin, Frostgorge Sound");
+		const RecipeNode vendorRoot = Recipe(100, 1, 1, { icy, ingot, rune }, "Weaponsmith");
+		const Plan vendorPlan = BuildPlan(vendorRoot, 1, items, prices, currencies, {}, options, {});
+		const std::vector<CraftStepGroup> vendorGroups = BuildStepGroups(vendorPlan);
+		Check(vendorGroups.size() == 4, "merchant visits and station runs stay in dependency order");
+		if (vendorGroups.size() == 4)
+		{
+			Check(vendorGroups[0].Action == CraftAction::Vendor && vendorGroups[0].Title == "Rojan the Penitent", "the first merchant visit leads the list");
+			Check(vendorGroups[0].Detail == "Earthshake Basin, Frostgorge Sound", "the merchant block keeps the map");
+			Check(vendorGroups[0].Cost == 20000, "the merchant block carries the purchase cost");
+			Check(vendorGroups[0].Steps.size() == 1 && vendorGroups[0].Steps[0].Detail.find("Rojan the Penitent") != std::string::npos, "the vendor step keeps its merchant detail");
+			Check(vendorGroups[1].Title == "Weaponsmith" && vendorGroups[1].Steps.size() == 1 && vendorGroups[1].Steps[0].Name == "Ingot", "the station run follows the purchase that feeds it");
+			Check(vendorGroups[2].Action == CraftAction::Vendor && vendorGroups[2].Cost == 30000, "a later merchant visit gets its own block in order");
+			Check(vendorGroups[3].Title == "Weaponsmith" && vendorGroups[3].Steps[0].Name == "Gift", "the goal craft closes the list");
+		}
+
+		const Plan empty;
+		Check(BuildStepGroups(empty).empty(), "an empty plan has no step groups");
+	}
+
+	// A craft that only has to be made because an earlier goal used up the stock
+	// still has to be listed before every line that consumes it.
+	void TestStepsFollowDependencies()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Ore";
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[101].Id = 101;
+		items[101].Name = "Staff";
+		items[200].Id = 200;
+		items[200].Name = "Ingot";
+		items[300].Id = 300;
+		items[300].Name = "Plate";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		const RecipeNode ingot = Recipe(200, 1, 1, { ItemNode(1, 2) }, "Weaponsmith");
+		const RecipeNode plate = Recipe(300, 1, 1, { ingot }, "Armorsmith");
+		const std::vector<RecipeNode> roots = {
+			Recipe(100, 1, 1, { plate }, "Weaponsmith"),
+			Recipe(101, 1, 1, { plate }, "Weaponsmith")
+		};
+
+		// One ingot in the bank covers the first goal's plate, so that goal never
+		// crafts one; the second goal must craft the plate and, with it, the ingot.
+		AccountData account;
+		account.Valid = true;
+		account.Items[200] = 1;
+		const Plan combined = BuildCombinedPlan(roots, items, prices, {}, account, options, {});
+
+		const std::vector<CraftStep> steps = BuildCraftingSteps(combined);
+		Check(steps.size() == 4, "every craft of both goals is listed once");
+		if (steps.size() == 4)
+		{
+			Check(steps[0].Name == "Ingot", "an ingredient first made for the second goal still leads the list");
+			Check(steps[1].Name == "Plate", "the plate that needs the ingot follows it");
+			Check(steps[2].Name == "Gift" && steps[3].Name == "Staff", "the goal crafts close the list in goal order");
+		}
+
+		const std::vector<CraftStepGroup> groups = BuildStepGroups(combined);
+		Check(groups.size() == 3, "the blocks follow the dependency order");
+		if (groups.size() == 3)
+		{
+			Check(groups[0].Title == "Weaponsmith" && groups[0].Steps.size() == 1 && groups[0].Steps[0].Name == "Ingot", "the shared ingredient opens the list");
+			Check(groups[1].Title == "Armorsmith" && groups[1].Steps[0].Name == "Plate", "the plate is crafted at its own station");
+			Check(groups[2].Title == "Weaponsmith" && groups[2].Steps.size() == 2, "both goal crafts close the list at the weaponsmith");
+		}
 	}
 
 	void TestParseRecipeTree()
@@ -646,6 +961,10 @@ int main()
 	TestVendorIngredients();
 	TestAchievementIngredients();
 	TestResearchNoteCost();
+	TestResearchNotesFromSourceRecipe();
+	TestCheapFineSourceBeatsExotic();
+	TestStepGroups();
+	TestStepsFollowDependencies();
 	TestParseRecipeTree();
 	TestParseMerchantPrice();
 	TestParseItemsAndPrices();

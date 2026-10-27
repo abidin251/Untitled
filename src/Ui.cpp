@@ -207,6 +207,9 @@ namespace mc
 
 		std::string ShoppingSourceCell(const ShoppingItem& aItem)
 		{
+			// Ingredients that exist only to produce research notes say so, so the
+			// lines under a research note row are never confused with real needs.
+			const std::string prefix = aItem.ResearchNotes && !aItem.Currency ? "For notes: " : "";
 			switch (aItem.Source)
 			{
 			case SourceKind::Vendor:
@@ -217,16 +220,16 @@ namespace mc
 				{
 					name.erase(paren);
 				}
-				return name.empty() ? "Merchant" : "Merchant: " + name;
+				return prefix + (name.empty() ? "Merchant" : "Merchant: " + name);
 			}
 			case SourceKind::Achievement:
-				return aItem.SourceDetail.empty() ? "Achievement" : aItem.SourceDetail;
+				return prefix + (aItem.SourceDetail.empty() ? "Achievement" : aItem.SourceDetail);
 			case SourceKind::TradingPost:
-				return aItem.FromVendor ? "Trading Post (cheaper)" : "Trading Post";
+				return prefix + (aItem.FromVendor ? "Trading Post (cheaper)" : "Trading Post");
 			case SourceKind::Currency:
 				return aItem.Currency ? "Wallet currency" : "Crafting";
 			default:
-				return SourceKindLabel(aItem.Source);
+				return prefix + SourceKindLabel(aItem.Source);
 			}
 		}
 
@@ -374,6 +377,10 @@ namespace mc
 				{
 					stream << entry.Quantity << " x " << entry.Name;
 					stream << " (" << ShoppingUnitPrice(entry) << " each) = " << ShoppingTotalPrice(entry);
+					if (entry.ResearchNotes && !entry.Currency)
+					{
+						stream << " - for research notes";
+					}
 					if (entry.Source != SourceKind::TradingPost && !entry.SourceDetail.empty())
 					{
 						stream << " - " << entry.SourceDetail;
@@ -993,13 +1000,21 @@ namespace mc
 
 			if (plan->ResearchNotesRequired > 0)
 			{
-				if (aApp.Settings.IncludeResearchNotes && aApp.Settings.ResearchNoteCost > 0)
+				if (aApp.Settings.IncludeResearchNotes && !plan->ResearchNoteSourceName.empty() && plan->ResearchNoteCrafts > 0)
 				{
-					ImGui::Text("Research notes: %s of %s needed at %s each = %s",
+					ImGui::Text("Research notes: %s of %s needed - craft %s x%d (%d notes per craft) = %s",
 						FormatNumber(plan->ResearchNotesNeeded).c_str(),
 						FormatNumber(plan->ResearchNotesRequired).c_str(),
-						FormatCoins(aApp.Settings.ResearchNoteCost).c_str(),
+						plan->ResearchNoteSourceName.c_str(),
+						plan->ResearchNoteCrafts,
+						plan->ResearchNoteYield,
 						FormatCoins(plan->ResearchNoteCost).c_str());
+				}
+				else if (aApp.Settings.IncludeResearchNotes)
+				{
+					ImGui::TextDisabled("Research notes: %s of %s needed - no craftable source could be priced yet.",
+						FormatNumber(plan->ResearchNotesRequired).c_str(),
+						FormatNumber(plan->ResearchNotesNeeded).c_str());
 				}
 				else
 				{
@@ -1101,23 +1116,41 @@ namespace mc
 			return "x" + FormatNumber(aStep.Remaining);
 		}
 
-		std::string BuildStepsText(const Plan& aPlan, const std::vector<CraftStep>& aSteps)
+		std::string BuildStepsText(const Plan& aPlan, const std::vector<CraftStepGroup>& aGroups)
 		{
 			std::ostringstream stream;
 			stream << "Mystic Crafting - " << aPlan.GoalName << " - crafting steps\r\n";
-			stream << "Remaining cost: " << FormatCoins(aPlan.RemainingCost) << "\r\n\r\n";
+			stream << "Work top to bottom. Everything to buy or gather is on the shopping list.\r\n\r\n";
 
 			int number = 1;
-			for (const auto& step : aSteps)
+			for (const auto& group : aGroups)
 			{
-				stream << number++ << ". " << StepVerb(step.Action) << " " << step.Name << " (" << StepQuantity(step) << ")";
-				if (!step.Detail.empty())
+				stream << group.Title;
+				if (group.ResearchNotes)
 				{
-					stream << " - " << step.Detail;
+					stream << " (for research notes)";
 				}
-				if (step.Cost > 0)
+				if (!group.Detail.empty())
 				{
-					stream << " = " << FormatCoins(step.Cost);
+					stream << " - " << group.Detail;
+				}
+				stream << "\r\n";
+				for (const auto& step : group.Steps)
+				{
+					stream << "  " << number++ << ". " << StepVerb(step.Action) << " " << step.Name << " (" << StepQuantity(step) << ")";
+					if (!step.Detail.empty() && step.Detail != group.Title)
+					{
+						stream << " - " << step.Detail;
+					}
+					if (step.ResearchNotes && !group.ResearchNotes)
+					{
+						stream << " [for research notes]";
+					}
+					if (step.Cost > 0)
+					{
+						stream << " = " << FormatCoins(step.Cost);
+					}
+					stream << "\r\n";
 				}
 				stream << "\r\n";
 			}
@@ -1133,7 +1166,14 @@ namespace mc
 				return;
 			}
 
-			const std::vector<CraftStep> steps = BuildCraftingSteps(*plan);
+			const std::vector<CraftStepGroup> groups = BuildStepGroups(*plan);
+			int totalSteps = 0;
+			i64 groupCost = 0;
+			for (const auto& group : groups)
+			{
+				totalSteps += static_cast<int>(group.Steps.size());
+				groupCost += group.Cost;
+			}
 			if (plan->GoalCount > 1)
 			{
 				ImGui::Text("Crafting steps for %d tracked plans", plan->GoalCount);
@@ -1143,19 +1183,20 @@ namespace mc
 				ImGui::Text("Crafting steps for %s", plan->GoalName.c_str());
 			}
 			ImGui::SameLine();
-			ImGui::TextDisabled("(%d steps, %s remaining)", static_cast<int>(steps.size()), FormatCoins(plan->RemainingCost).c_str());
+			ImGui::TextDisabled("(%d steps in %d places, %s remaining)", totalSteps,
+				static_cast<int>(groups.size()), FormatCoins(plan->RemainingCost).c_str());
 			if (ImGui::Button("Copy steps"))
 			{
-				CopyToClipboard(BuildStepsText(*plan, steps));
+				CopyToClipboard(BuildStepsText(*plan, groups));
 				aApp.Notify("Crafting steps copied to the clipboard.");
 			}
 			ImGui::SameLine();
-			ImGui::TextDisabled("Steps are ordered so every ingredient is made or bought before it is used.");
+			ImGui::TextDisabled("Work top to bottom. Trading Post purchases are on the shopping list.");
 
-			if (steps.empty())
+			if (totalSteps == 0)
 			{
 				ImGui::Spacing();
-				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "Nothing left to do - every ingredient is already owned.");
+				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "No crafting steps - the plan is bought, or every material is already owned.");
 				return;
 			}
 
@@ -1171,38 +1212,77 @@ namespace mc
 				ImGui::TableHeadersRow();
 
 				int number = 1;
-				for (const auto& step : steps)
+				for (const auto& group : groups)
 				{
+					// The place itself: one row for the merchant, station or visit
+					// that every step below it belongs to.
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
-					ImGui::TextDisabled("%d", number++);
-
+					ImGui::TextDisabled("> ");
 					ImGui::TableSetColumnIndex(1);
-					DrawIcon(aApp, step.Icon, (step.Currency ? "currency_" : "item_") + std::to_string(step.Id), 18.0f);
-					ImGui::SameLine(0, 5.0f);
-					ImGui::BeginGroup();
-					ImGui::TextUnformatted((std::string(StepVerb(step.Action)) + " " + step.Name).c_str());
-					if (!step.Detail.empty())
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1.0f));
+					ImGui::TextUnformatted(group.Title.c_str());
+					ImGui::PopStyleColor();
+					if (group.ResearchNotes)
 					{
-						ImGui::TextDisabled("%s", step.Detail.c_str());
+						ImGui::SameLine();
+						ImGui::TextColored(ImVec4(0.60f, 0.80f, 0.95f, 1.0f), "(for research notes)");
 					}
-					ImGui::EndGroup();
-					if (ImGui::IsItemHovered())
+					if (!group.Detail.empty())
 					{
-						ShowItemTooltip(aApp, step.Id, step.Currency);
+						ImGui::SameLine();
+						ImGui::TextDisabled("- %s", group.Detail.c_str());
 					}
-
 					ImGui::TableSetColumnIndex(2);
-					ImGui::TextUnformatted(StepQuantity(step).c_str());
-
+					ImGui::TextDisabled("%d step%s", static_cast<int>(group.Steps.size()), group.Steps.size() == 1 ? "" : "s");
 					ImGui::TableSetColumnIndex(3);
-					if (step.Cost > 0)
+					if (group.Cost > 0)
 					{
-						ImGui::TextUnformatted(FormatCoins(step.Cost).c_str());
+						ImGui::TextUnformatted(FormatCoins(group.Cost).c_str());
 					}
-					else
+
+					for (const auto& step : group.Steps)
 					{
-						ImGui::TextDisabled("-");
+						ImGui::TableNextRow();
+						ImGui::TableSetColumnIndex(0);
+						ImGui::TextDisabled("%d", number++);
+
+						ImGui::TableSetColumnIndex(1);
+						DrawIcon(aApp, step.Icon, (step.Currency ? "currency_" : "item_") + std::to_string(step.Id), 18.0f);
+						ImGui::SameLine(0, 5.0f);
+						ImGui::BeginGroup();
+						ImGui::TextUnformatted((std::string(StepVerb(step.Action)) + " " + step.Name).c_str());
+						// The block header names the place, so the detail line only adds
+						// what it does not already say: the merchant and map, or why the
+						// step is here.
+						std::string detail = step.Detail;
+						if (step.ResearchNotes)
+						{
+							detail = detail.empty() ? "For research notes" : detail + " - for research notes";
+						}
+						if (!detail.empty() && detail != group.Title)
+						{
+							ImGui::TextDisabled("%s", detail.c_str());
+						}
+						ImGui::EndGroup();
+						if (ImGui::IsItemHovered())
+						{
+							ShowItemTooltip(aApp, step.Id, step.Currency);
+						}
+
+						ImGui::TableSetColumnIndex(2);
+						ImGui::TextUnformatted(StepQuantity(step).c_str());
+
+						ImGui::TableSetColumnIndex(3);
+						if (step.Cost > 0)
+						{
+							ImGui::TextUnformatted(FormatCoins(step.Cost).c_str());
+						}
+						else
+						{
+							ImGui::TextDisabled("-");
+						}
+
 					}
 				}
 
@@ -1346,20 +1426,8 @@ namespace mc
 
 			ImGui::Spacing();
 			ImGui::TextUnformatted("Research notes");
-			ImGui::TextDisabled("Plans list the research notes they need as a wallet currency. Enable this to price the notes you are still missing.");
+			ImGui::TextDisabled("Plans list the research notes they need as a wallet currency. Notes cost the ingredients of the item you craft at a crafting station with research turned on.");
 			bool notesChanged = ImGui::Checkbox("Include research note crafting cost", &aApp.Settings.IncludeResearchNotes);
-			ImGui::SameLine();
-			double noteCost = static_cast<double>(aApp.Settings.ResearchNoteCost) / 100.0;
-			ImGui::SetNextItemWidth(110.0f);
-			if (ImGui::InputDouble("gold per research note", &noteCost, 0.01, 0.1, "%.2f"))
-			{
-				if (noteCost < 0.0)
-				{
-					noteCost = 0.0;
-				}
-				aApp.Settings.ResearchNoteCost = static_cast<int>(noteCost * 100.0 + 0.5);
-				notesChanged = true;
-			}
 			if (notesChanged)
 			{
 				aApp.SaveSettingsNow();
@@ -1369,6 +1437,8 @@ namespace mc
 				}
 				aApp.RefreshTrackedShopping();
 			}
+
+			ImGui::TextDisabled("The cheapest source is picked automatically: 90 cheap crafted pieces - fine, masterwork, rare and exotic - are each priced from their ingredients, the notes per craft come from the item's level and rarity, and the lowest cost per note wins. Its ingredients join the shopping list.");
 
 			ImGui::Spacing();
 			ImGui::TextUnformatted("Acquisition data provider");
@@ -1466,7 +1536,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.3.0 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.7.0 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

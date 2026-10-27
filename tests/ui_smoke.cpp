@@ -192,8 +192,24 @@ namespace
 		gift.Children.push_back(currency);
 
 		mc::PlanNode owned = MakeNode(202, "Already Owned", 1, 1, mc::SourceKind::Unknown, 0);
+
+		// Merchant, achievement and forge steps, so the grouped steps tab shows
+		// one block per place to go.
+		mc::PlanNode runes = MakeNode(203, "Icy Runestone", 2, 0, mc::SourceKind::Vendor, 20000);
+		runes.SourceDetail = "Rojan the Penitent (Earthshake Basin, Frostgorge Sound)";
+		runes.Crafts = 2;
+		mc::PlanNode trophy = MakeNode(204, "Test Trophy", 1, 0, mc::SourceKind::Achievement, 0);
+		trophy.SourceDetail = "Achievement #2438";
+		mc::PlanNode forge = MakeNode(205, "Forged Gift", 1, 0, mc::SourceKind::MysticForge, 5000);
+		forge.Crafts = 1;
+		forge.Discipline = "Mystic Forge";
+		forge.SourceDetail = "Mystic Forge";
+		forge.Children.push_back(runes);
+		forge.Children.push_back(trophy);
+
 		root.Children.push_back(gift);
 		root.Children.push_back(owned);
+		root.Children.push_back(forge);
 		plan->Root = root;
 
 		mc::ShoppingItem item;
@@ -246,9 +262,25 @@ namespace
 		notes.Currency = true;
 		notes.SourceDetail = "Crafted and salvaged with a research kit";
 		plan->Shopping.push_back(notes);
+
+		mc::ShoppingItem noteIngredient;
+		noteIngredient.Id = 208;
+		noteIngredient.Name = "Cured Leather";
+		noteIngredient.Quantity = 500;
+		noteIngredient.UnitCost = 100;
+		noteIngredient.TotalCost = 50000;
+		noteIngredient.Source = mc::SourceKind::TradingPost;
+		noteIngredient.SourceDetail = "For research notes - Buy from Trading Post";
+		noteIngredient.FromTradingPost = true;
+		noteIngredient.ResearchNotes = true;
+		plan->Shopping.push_back(noteIngredient);
+
 		plan->ResearchNotesRequired = 250;
 		plan->ResearchNotesNeeded = 250;
-		plan->ResearchNoteCost = 25000;
+		plan->ResearchNoteCost = 50000;
+		plan->ResearchNoteSourceName = "Rabid Draconic Gauntlets";
+		plan->ResearchNoteYield = 5;
+		plan->ResearchNoteCrafts = 50;
 
 		plan->CurrencyNeeded[1] = 400000;
 		plan->CurrencyNeeded[23] = 200;
@@ -314,7 +346,6 @@ int main()
 	app.Settings.Tracked.push_back(101);
 	app.Settings.CombineTracked = true;
 	app.Settings.IncludeResearchNotes = true;
-	app.Settings.ResearchNoteCost = 100;
 
 	{
 		auto combinedPlan = MakePlan();
