@@ -772,6 +772,14 @@ namespace mc
 			}
 		};
 
+		// The checklist with the dependencies between its lines, so the caller can
+		// order the work and group it into visits.
+		struct StepList
+		{
+			std::vector<CraftStep> Steps;
+			std::vector<std::vector<std::size_t>> Dependencies; // indices into Steps
+		};
+
 		// Walks the plan tree and records, for every line, the lines that have to
 		// be done before it. The checklist is then ordered from those dependencies
 		// rather than from the shape of the walk, so an ingredient never lands
@@ -780,7 +788,7 @@ namespace mc
 		class StepCollector
 		{
 		public:
-			std::vector<CraftStep> Collect(const Plan& aPlan)
+			StepList Collect(const Plan& aPlan)
 			{
 				// Research notes are an ingredient of the goal, so the crafts that
 				// produce them come before the goal's own work.
@@ -905,12 +913,15 @@ namespace mc
 
 			// Dependency order: a line comes out once every line it needs is out.
 			// Among the lines that are ready, the plan's own order wins, so the walk
-			// above still decides the sequence wherever dependencies allow it.
-			std::vector<CraftStep> Order() const
+			// above still decides the sequence wherever dependencies allow it. The
+			// dependencies come back with the lines, remapped to the final order, so
+			// the work can also be folded into visits.
+			StepList Order() const
 			{
 				const std::size_t count = Entries.size();
 				std::vector<int> waiting(count, 0);
 				std::vector<std::vector<std::size_t>> dependents(count);
+				std::vector<std::vector<std::size_t>> dependencies(count);
 				for (std::size_t i = 0; i < count; ++i)
 				{
 					for (const StepKey& dependency : Entries[i].Dependencies)
@@ -920,6 +931,7 @@ namespace mc
 						{
 							continue;
 						}
+						dependencies[i].push_back(found->second);
 						++waiting[i];
 						dependents[found->second].push_back(i);
 					}
@@ -934,14 +946,16 @@ namespace mc
 					}
 				}
 
-				std::vector<CraftStep> steps;
-				steps.reserve(count);
+				StepList list;
+				list.Steps.reserve(count);
+				std::vector<std::size_t> position(count, 0);
 				std::vector<bool> emitted(count, false);
 				while (!ready.empty())
 				{
 					const std::size_t index = ready.top();
 					ready.pop();
-					steps.push_back(Entries[index].Step);
+					position[index] = list.Steps.size();
+					list.Steps.push_back(Entries[index].Step);
 					emitted[index] = true;
 					for (std::size_t dependent : dependents[index])
 					{
@@ -958,10 +972,20 @@ namespace mc
 				{
 					if (!emitted[i])
 					{
-						steps.push_back(Entries[i].Step);
+						position[i] = list.Steps.size();
+						list.Steps.push_back(Entries[i].Step);
 					}
 				}
-				return steps;
+
+				list.Dependencies.resize(list.Steps.size());
+				for (std::size_t i = 0; i < count; ++i)
+				{
+					for (std::size_t dependency : dependencies[i])
+					{
+						list.Dependencies[position[i]].push_back(position[dependency]);
+					}
+				}
+				return list;
 			}
 		};
 	}
@@ -972,7 +996,7 @@ namespace mc
 	// amount, placed where its own ingredients allow it.
 	std::vector<CraftStep> BuildCraftingSteps(const Plan& aPlan)
 	{
-		return StepCollector().Collect(aPlan);
+		return StepCollector().Collect(aPlan).Steps;
 	}
 
 	// Splits a place label like "Rojan the Penitent (Lions Arch)" into the
@@ -1008,47 +1032,192 @@ namespace mc
 		}
 	}
 
-	// Groups consecutive steps that happen in the same place, so the list keeps
-	// dependency order while a run of work at one merchant, station or forge
-	// reads as one visit. A place used again later gets its own block again.
+	// Folds the steps into visits: everything to do at one merchant, crafting
+	// station or Mystic Forge becomes a single block, so each place is worked
+	// through once. The blocks are ordered so a place that feeds another comes
+	// first; whatever is still not ready when its place comes round waits for the
+	// next round, which is the only case where a place is visited twice.
 	std::vector<CraftStepGroup> BuildStepGroups(const Plan& aPlan)
 	{
-		const std::vector<CraftStep> steps = BuildCraftingSteps(aPlan);
-		std::vector<CraftStepGroup> groups;
-		std::string lastKey;
-
-		for (const auto& step : steps)
+		const StepList list = StepCollector().Collect(aPlan);
+		if (list.Steps.empty())
 		{
-			const std::string key = StepGroupKey(step);
-			if (groups.empty() || key != lastKey)
+			return {};
+		}
+
+		auto startVisit = [](const CraftStep& aStep, int aVisit) {
+			CraftStepGroup group;
+			group.Action = aStep.Action;
+			group.ResearchNotes = aStep.ResearchNotes;
+			group.Visit = aVisit;
+			if (aStep.Action == CraftAction::Vendor)
 			{
-				CraftStepGroup group;
-				group.Action = step.Action;
-				group.ResearchNotes = step.ResearchNotes;
-				if (step.Action == CraftAction::Vendor)
+				std::string place;
+				SplitPlaceDetail(aStep.Detail, place, group.Detail);
+				group.Title = place.empty() ? "Merchant" : place;
+			}
+			else if (aStep.Action == CraftAction::MysticForge)
+			{
+				group.Title = "Mystic Forge";
+				group.Detail = "Combine the ingredients in the Mystic Forge";
+			}
+			else
+			{
+				group.Title = aStep.Detail.empty() ? "Crafting station" : aStep.Detail;
+				group.Detail = "Craft at the " + group.Title + " station";
+			}
+			return group;
+		};
+
+		// The place every step happens at, and the places in the order they are
+		// first needed.
+		std::vector<std::string> keys(list.Steps.size());
+		std::vector<std::string> places;
+		std::map<std::string, std::size_t> placeIndex;
+		std::vector<std::vector<std::size_t>> slots;
+		for (std::size_t i = 0; i < list.Steps.size(); ++i)
+		{
+			keys[i] = StepGroupKey(list.Steps[i]);
+			if (placeIndex.find(keys[i]) == placeIndex.end())
+			{
+				placeIndex[keys[i]] = places.size();
+				places.push_back(keys[i]);
+				slots.emplace_back();
+			}
+			slots[placeIndex[keys[i]]].push_back(i);
+		}
+
+		// Which place has to be visited before which: a step at one place that
+		// needs a step at another puts that other place first.
+		const std::size_t placeCount = places.size();
+		std::vector<int> waiting(placeCount, 0);
+		std::vector<std::vector<std::size_t>> next(placeCount);
+		for (std::size_t i = 0; i < list.Steps.size(); ++i)
+		{
+			// A place waits for every place that makes something its steps need.
+			const std::size_t dependent = placeIndex[keys[i]];
+			for (std::size_t dependency : list.Dependencies[i])
+			{
+				const std::size_t provider = placeIndex[keys[dependency]];
+				if (provider == dependent)
 				{
-					std::string place;
-					SplitPlaceDetail(step.Detail, place, group.Detail);
-					group.Title = place.empty() ? "Merchant" : place;
+					continue;
 				}
-				else if (step.Action == CraftAction::MysticForge)
+				bool known = false;
+				for (std::size_t other : next[provider])
 				{
-					group.Title = "Mystic Forge";
-					group.Detail = "Combine the ingredients in the Mystic Forge";
+					if (other == dependent)
+					{
+						known = true;
+						break;
+					}
 				}
-				else
+				if (known)
 				{
-					group.Title = step.Detail.empty() ? "Crafting station" : step.Detail;
-					group.Detail = "Craft at the " + group.Title + " station";
+					continue;
 				}
-				groups.push_back(std::move(group));
-				lastKey = key;
+				next[provider].push_back(dependent);
+				++waiting[dependent];
+			}
+		}
+
+		std::priority_queue<std::size_t, std::vector<std::size_t>, std::greater<std::size_t>> ready;
+		std::vector<std::size_t> placeOrder;
+		placeOrder.reserve(placeCount);
+		for (std::size_t i = 0; i < placeCount; ++i)
+		{
+			if (waiting[i] == 0)
+			{
+				ready.push(i);
+			}
+		}
+		while (!ready.empty())
+		{
+			const std::size_t place = ready.top();
+			ready.pop();
+			placeOrder.push_back(place);
+			for (std::size_t other : next[place])
+			{
+				if (--waiting[other] == 0)
+				{
+					ready.push(other);
+				}
+			}
+		}
+		// Two places that feed each other cannot both go first: the rest keeps its
+		// first-need order and the rounds below split those visits.
+		for (std::size_t i = 0; i < placeCount; ++i)
+		{
+			if (std::find(placeOrder.begin(), placeOrder.end(), i) == placeOrder.end())
+			{
+				placeOrder.push_back(i);
+			}
+		}
+
+		std::vector<CraftStepGroup> groups;
+		std::map<std::string, int> visits;
+		std::vector<bool> done(list.Steps.size(), false);
+		std::size_t remaining = list.Steps.size();
+		while (remaining > 0)
+		{
+			bool progress = false;
+			for (std::size_t place : placeOrder)
+			{
+				bool started = false;
+				for (std::size_t index : slots[place])
+				{
+					if (done[index])
+					{
+						continue;
+					}
+					bool readyNow = true;
+					for (std::size_t dependency : list.Dependencies[index])
+					{
+						if (!done[dependency])
+						{
+							readyNow = false;
+							break;
+						}
+					}
+					if (!readyNow)
+					{
+						continue;
+					}
+					if (!started)
+					{
+						groups.push_back(startVisit(list.Steps[index], visits[keys[index]] + 1));
+						++visits[keys[index]];
+						started = true;
+					}
+					CraftStepGroup& group = groups.back();
+					group.Cost += list.Steps[index].Cost;
+					group.ResearchNotes = group.ResearchNotes && list.Steps[index].ResearchNotes;
+					group.Steps.push_back(list.Steps[index]);
+					done[index] = true;
+					--remaining;
+					progress = true;
+				}
 			}
 
-			CraftStepGroup& group = groups.back();
-			group.Cost += step.Cost;
-			group.ResearchNotes = group.ResearchNotes && step.ResearchNotes;
-			group.Steps.push_back(step);
+			if (!progress)
+			{
+				// A dependency loop would starve the rounds: the rest is listed in plan
+				// order, one line per visit, so nothing is dropped.
+				for (std::size_t i = 0; i < list.Steps.size(); ++i)
+				{
+					if (done[i])
+					{
+						continue;
+					}
+					CraftStepGroup group = startVisit(list.Steps[i], visits[keys[i]] + 1);
+					++visits[keys[i]];
+					group.Cost += list.Steps[i].Cost;
+					group.Steps.push_back(list.Steps[i]);
+					groups.push_back(std::move(group));
+					done[i] = true;
+					--remaining;
+				}
+			}
 		}
 
 		return groups;

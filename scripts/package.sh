@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-1.8.0}"
+VERSION="${VERSION:-1.9.0}"
 DLL="${1:-$ROOT/build-win/MysticCrafting.dll}"
 
 if [[ ! -f "$DLL" ]]; then

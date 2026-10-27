@@ -1161,6 +1161,10 @@ namespace mc
 				{
 					stream << " - " << group.Detail;
 				}
+				if (group.Visit > 1)
+				{
+					stream << " [visit " << group.Visit << "]";
+				}
 				stream << "\r\n";
 				for (const auto& step : group.Steps)
 				{
@@ -1178,7 +1182,7 @@ namespace mc
 						stream << " = " << FormatCoins(step.Cost);
 					}
 					stream << "\r\n";
-					if (!step.Location.empty())
+					if (!step.Location.empty() && step.Location != group.Detail)
 					{
 						stream << "      Location: " << step.Location << "\r\n";
 					}
@@ -1223,7 +1227,7 @@ namespace mc
 				ImGui::Text("Crafting steps for %s", plan->GoalName.c_str());
 			}
 			ImGui::SameLine();
-			ImGui::TextDisabled("(%d steps in %d places, %s remaining)", totalSteps,
+			ImGui::TextDisabled("(%d steps in %d visits, %s remaining)", totalSteps,
 				static_cast<int>(groups.size()), FormatCoins(plan->RemainingCost).c_str());
 			if (ImGui::Button("Copy steps"))
 			{
@@ -1231,7 +1235,7 @@ namespace mc
 				aApp.Notify("Crafting steps copied to the clipboard.");
 			}
 			ImGui::SameLine();
-			ImGui::TextDisabled("Work top to bottom. Trading Post purchases are on the shopping list.");
+			ImGui::TextDisabled("Work top to bottom; each block is one place to go. Trading Post purchases are on the shopping list.");
 
 			if (totalSteps == 0)
 			{
@@ -1259,10 +1263,14 @@ namespace mc
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextDisabled("> ");
-					ImGui::TableSetColumnIndex(1);
-					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1.0f));
+					ImGui::TableSetColumnIndex(1);						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1.0f));
 					ImGui::TextUnformatted(group.Title.c_str());
 					ImGui::PopStyleColor();
+					if (group.Visit > 1)
+					{
+						ImGui::SameLine();
+						ImGui::TextColored(ImVec4(0.95f, 0.60f, 0.40f, 1.0f), "(visit %d)", group.Visit);
+					}
 					if (group.ResearchNotes)
 					{
 						ImGui::SameLine();
@@ -1306,7 +1314,7 @@ namespace mc
 						{
 							ImGui::TextDisabled("%s", detail.c_str());
 						}
-						if (!step.Location.empty())
+						if (!step.Location.empty() && step.Location != group.Detail)
 						{
 							ImGui::TextDisabled("Location: %s", step.Location.c_str());
 						}
@@ -1592,7 +1600,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.8.0 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.0 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

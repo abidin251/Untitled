@@ -790,17 +790,20 @@ namespace
 		const RecipeNode rune = MerchantRecipe(203, 1, 1, 30000, "Rojan the Penitent", "Earthshake Basin, Frostgorge Sound");
 		const RecipeNode vendorRoot = Recipe(100, 1, 1, { icy, ingot, rune }, "Weaponsmith");
 		const Plan vendorPlan = BuildPlan(vendorRoot, 1, items, prices, currencies, {}, options, {});
+		// Each place is worked through once: both purchases happen in a single
+		// merchant visit and both crafts in a single station visit.
 		const std::vector<CraftStepGroup> vendorGroups = BuildStepGroups(vendorPlan);
-		Check(vendorGroups.size() == 4, "merchant visits and station runs stay in dependency order");
-		if (vendorGroups.size() == 4)
+		Check(vendorGroups.size() == 2, "a merchant and a station are one visit each");
+		if (vendorGroups.size() == 2)
 		{
-			Check(vendorGroups[0].Action == CraftAction::Vendor && vendorGroups[0].Title == "Rojan the Penitent", "the first merchant visit leads the list");
+			Check(vendorGroups[0].Action == CraftAction::Vendor && vendorGroups[0].Title == "Rojan the Penitent", "the merchant visit leads the list");
 			Check(vendorGroups[0].Detail == "Earthshake Basin, Frostgorge Sound", "the merchant block keeps the map");
-			Check(vendorGroups[0].Cost == 20000, "the merchant block carries the purchase cost");
-			Check(vendorGroups[0].Steps.size() == 1 && vendorGroups[0].Steps[0].Detail.find("Rojan the Penitent") != std::string::npos, "the vendor step keeps its merchant detail");
-			Check(vendorGroups[1].Title == "Weaponsmith" && vendorGroups[1].Steps.size() == 1 && vendorGroups[1].Steps[0].Name == "Ingot", "the station run follows the purchase that feeds it");
-			Check(vendorGroups[2].Action == CraftAction::Vendor && vendorGroups[2].Cost == 30000, "a later merchant visit gets its own block in order");
-			Check(vendorGroups[3].Title == "Weaponsmith" && vendorGroups[3].Steps[0].Name == "Gift", "the goal craft closes the list");
+			Check(vendorGroups[0].Cost == 50000, "the merchant block carries the cost of every purchase there");
+			Check(vendorGroups[0].Steps.size() == 2, "both purchases happen in the one visit");
+			Check(vendorGroups[0].Steps[0].Detail.find("Rojan the Penitent") != std::string::npos, "the vendor step keeps its merchant detail");
+			Check(vendorGroups[1].Title == "Weaponsmith" && vendorGroups[1].Visit == 1, "the station is visited once");
+			Check(vendorGroups[1].Steps.size() == 2, "both crafts happen in the one station visit");
+			Check(vendorGroups[1].Steps[0].Name == "Ingot" && vendorGroups[1].Steps[1].Name == "Gift", "the station keeps dependency order");
 		}
 
 		// Every row carries what it consumes and, for a merchant, where they are:
@@ -882,6 +885,7 @@ namespace
 			Check(groups[0].Title == "Weaponsmith" && groups[0].Steps.size() == 1 && groups[0].Steps[0].Name == "Ingot", "the shared ingredient opens the list");
 			Check(groups[1].Title == "Armorsmith" && groups[1].Steps[0].Name == "Plate", "the plate is crafted at its own station");
 			Check(groups[2].Title == "Weaponsmith" && groups[2].Steps.size() == 2, "both goal crafts close the list at the weaponsmith");
+			Check(groups[2].Visit == 2, "a place that has to be worked twice is marked as a later visit");
 		}
 	}
 

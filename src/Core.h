@@ -268,15 +268,18 @@ namespace mc
 		std::vector<StepNeed> Needs; // what the step consumes
 	};
 
-	// Steps that belong to the same place to go, in first-appearance order: one
-	// merchant, one crafting station, the Trading Post, the wallet. Each group
-	// keeps its steps in dependency order and carries its combined coin cost.
+	// One place to go: a merchant, a crafting station or the Mystic Forge, with
+	// every step that happens there. Each group keeps its steps in dependency
+	// order and carries its combined coin cost, so a visit can be worked through
+	// without coming back - Visit is above 1 only when a craft at this place needs
+	// something another place makes later.
 	struct CraftStepGroup
 	{
 		std::string Title;       // merchant name, discipline, "Trading Post", ...
 		std::string Detail;      // map, location or what happens there
 		CraftAction Action = CraftAction::Craft;
 		i64 Cost = 0;
+		int Visit = 1;           // 2 for the second time this place has to be worked
 		bool ResearchNotes = false; // every step in the group exists for research notes
 		std::vector<CraftStep> Steps;
 	};
