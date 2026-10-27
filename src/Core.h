@@ -239,6 +239,14 @@ namespace mc
 		Obtain,
 	};
 
+	// One ingredient a step consumes, so a row can be read on its own instead of
+	// being traced back through the plan tree.
+	struct StepNeed
+	{
+		std::string Name;
+		int Amount = 0;
+	};
+
 	// One actionable line of a dependency-ordered crafting plan.
 	struct CraftStep
 	{
@@ -256,6 +264,8 @@ namespace mc
 		double OutputPerCraft = 1.0;
 		i64 Cost = 0;            // purchases and vendor costs; 0 for crafts and currencies
 		bool ResearchNotes = false; // the step exists to produce research notes
+		std::string Location;    // the map a merchant stands on
+		std::vector<StepNeed> Needs; // what the step consumes
 	};
 
 	// Steps that belong to the same place to go, in first-appearance order: one

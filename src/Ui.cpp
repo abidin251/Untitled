@@ -1116,6 +1116,33 @@ namespace mc
 			return "x" + FormatNumber(aStep.Remaining);
 		}
 
+		// What a step consumes, written out for the row and the clipboard text.
+		std::string StepNeedsText(const CraftStep& aStep)
+		{
+			std::vector<std::string> parts;
+			parts.reserve(aStep.Needs.size());
+			for (const StepNeed& need : aStep.Needs)
+			{
+				parts.push_back(FormatNumber(need.Amount) + " " + need.Name);
+			}
+			return Join(parts, ", ");
+		}
+
+		// A craft that makes several at once says so, since that is what turns the
+		// recipe into the amount on the row.
+		std::string StepYieldText(const CraftStep& aStep)
+		{
+			if (aStep.OutputPerCraft <= 1.0)
+			{
+				return {};
+			}
+			if (aStep.Action != CraftAction::Craft && aStep.Action != CraftAction::MysticForge)
+			{
+				return {};
+			}
+			return "Yields " + FormatNumber(static_cast<i64>(aStep.OutputPerCraft + 0.5)) + " per craft";
+		}
+
 		std::string BuildStepsText(const Plan& aPlan, const std::vector<CraftStepGroup>& aGroups)
 		{
 			std::ostringstream stream;
@@ -1151,6 +1178,19 @@ namespace mc
 						stream << " = " << FormatCoins(step.Cost);
 					}
 					stream << "\r\n";
+					if (!step.Location.empty())
+					{
+						stream << "      Location: " << step.Location << "\r\n";
+					}
+					const std::string yields = StepYieldText(step);
+					if (!yields.empty())
+					{
+						stream << "      " << yields << "\r\n";
+					}
+					if (!step.Needs.empty())
+					{
+						stream << "      Needs " << StepNeedsText(step) << "\r\n";
+					}
 				}
 				stream << "\r\n";
 			}
@@ -1252,9 +1292,11 @@ namespace mc
 						ImGui::SameLine(0, 5.0f);
 						ImGui::BeginGroup();
 						ImGui::TextUnformatted((std::string(StepVerb(step.Action)) + " " + step.Name).c_str());
-						// The block header names the place, so the detail line only adds
-						// what it does not already say: the merchant and map, or why the
-						// step is here.
+						// Every line under the name is part of the step: where the work
+						// happens, what it consumes and what it produces, so the row can be
+						// worked through without opening anything else.
+						const float wrap = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+						ImGui::PushTextWrapPos(wrap);
 						std::string detail = step.Detail;
 						if (step.ResearchNotes)
 						{
@@ -1264,6 +1306,20 @@ namespace mc
 						{
 							ImGui::TextDisabled("%s", detail.c_str());
 						}
+						if (!step.Location.empty())
+						{
+							ImGui::TextDisabled("Location: %s", step.Location.c_str());
+						}
+						const std::string yields = StepYieldText(step);
+						if (!yields.empty())
+						{
+							ImGui::TextDisabled("%s", yields.c_str());
+						}
+						if (!step.Needs.empty())
+						{
+							ImGui::TextDisabled("Needs %s", StepNeedsText(step).c_str());
+						}
+						ImGui::PopTextWrapPos();
 						ImGui::EndGroup();
 						if (ImGui::IsItemHovered())
 						{
@@ -1536,7 +1592,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.7.0 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.8.0 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

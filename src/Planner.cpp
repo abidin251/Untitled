@@ -9,6 +9,10 @@
 
 namespace mc
 {
+	// Declared here so the step collector, which lives in the anonymous namespace
+	// below, can label a merchant step with the map this splits out.
+	void SplitPlaceDetail(const std::string& aDetail, std::string& aPlace, std::string& aWhere);
+
 	namespace
 	{
 		struct PlanContext
@@ -726,6 +730,32 @@ namespace mc
 				break;
 			}
 
+			// What the step consumes: the ingredients of a craft, or the coins and
+			// currencies a merchant asks for. The row then stands on its own.
+			for (const auto& child : aNode.Children)
+			{
+				const int amount = child.Required > 0 ? child.Required : child.Remaining;
+				if (amount <= 0 || child.Name.empty())
+				{
+					continue;
+				}
+				StepNeed need;
+				need.Name = child.Name;
+				need.Amount = amount;
+				step.Needs.push_back(std::move(need));
+			}
+
+			// A purchase says where the merchant stands, since finding them is the
+			// part of the errand the plan does not otherwise spell out.
+			if (step.Action == CraftAction::Vendor)
+			{
+				std::string place;
+				SplitPlaceDetail(
+					aNode.MerchantDetail.empty() ? aNode.SourceDetail : aNode.MerchantDetail,
+					place,
+					step.Location);
+			}
+
 			return step;
 		}
 
@@ -839,6 +869,30 @@ namespace mc
 					entry.Step.Owned += step.Owned;
 					entry.Step.Cost += step.Cost;
 					entry.Step.ResearchNotes = entry.Step.ResearchNotes && step.ResearchNotes;
+					if (entry.Step.Location.empty())
+					{
+						entry.Step.Location = step.Location;
+					}
+					for (const StepNeed& need : step.Needs)
+					{
+						StepNeed* known = nullptr;
+						for (StepNeed& existing : entry.Step.Needs)
+						{
+							if (existing.Name == need.Name)
+							{
+								known = &existing;
+								break;
+							}
+						}
+						if (known != nullptr)
+						{
+							known->Amount += need.Amount;
+						}
+						else
+						{
+							entry.Step.Needs.push_back(need);
+						}
+					}
 					for (const StepKey& dependency : provided)
 					{
 						AddKey(entry.Dependencies, dependency);

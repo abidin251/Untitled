@@ -803,6 +803,28 @@ namespace
 			Check(vendorGroups[3].Title == "Weaponsmith" && vendorGroups[3].Steps[0].Name == "Gift", "the goal craft closes the list");
 		}
 
+		// Every row carries what it consumes and, for a merchant, where they are:
+		// the craft needs its ore, the purchase carries the map and the coin price.
+		const std::vector<CraftStep> detailedSteps = BuildCraftingSteps(vendorPlan);
+		bool sawCraftNeeds = false;
+		bool sawMerchantDetail = false;
+		for (const auto& step : detailedSteps)
+		{
+			if (step.Id == 200)
+			{
+				sawCraftNeeds = step.Needs.size() == 1 && step.Needs[0].Name == "Ore" && step.Needs[0].Amount == 4;
+			}
+			if (step.Id == 202)
+			{
+				// Two runestones at one gold each, so the row says what the merchant
+				// charges for the whole purchase.
+				sawMerchantDetail = step.Location == "Earthshake Basin, Frostgorge Sound"
+					&& step.Needs.size() == 1 && step.Needs[0].Name == "Coin" && step.Needs[0].Amount == 20000;
+			}
+		}
+		Check(sawCraftNeeds, "a craft step lists the ingredients it consumes");
+		Check(sawMerchantDetail, "a merchant step carries the location and what the merchant charges");
+
 		const Plan empty;
 		Check(BuildStepGroups(empty).empty(), "an empty plan has no step groups");
 	}
