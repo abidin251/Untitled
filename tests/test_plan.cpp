@@ -553,6 +553,7 @@ namespace
 		items[48601].Name = "Rabid Draconic Gauntlets";
 		items[48601].Rarity = "Exotic";
 		items[48601].Level = 80;
+		items[48601].Type = "Armor";
 
 		CurrencyDb currencies;
 		currencies[kResearchNoteCurrency].Id = kResearchNoteCurrency;
@@ -581,12 +582,13 @@ namespace
 
 		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
 
-		// 250 notes need 50 crafts of 10 leather at 1s each: 50 gold, 20s per note.
+		// A level-80 exotic armor craft is measured at about 75 notes, so 250 of
+		// them need four crafts of 10 leather at 1s each: 40s, 16c a note.
 		Check(plan.ResearchNotesRequired == 250 && plan.ResearchNotesNeeded == 250, "the source recipe prices the notes the plan needs");
-		Check(plan.ResearchNoteCrafts == 50 && plan.ResearchNoteYield == 5, "the plan reports the crafts and the yield");
+		Check(plan.ResearchNoteCrafts == 4 && plan.ResearchNoteYield == 75, "the plan reports the crafts and the measured yield");
 		Check(plan.ResearchNoteSourceName == "Rabid Draconic Gauntlets", "the source item is named in the plan");
-		Check(plan.ResearchNoteCost == 50000, "the note cost is the ingredient cost of the source recipe, not the Trading Post price");
-		Check(plan.RemainingCost == 50000, "the note cost is part of the remaining cost");
+		Check(plan.ResearchNoteCost == 4000, "the note cost is the ingredient cost of the source recipe, not the Trading Post price");
+		Check(plan.RemainingCost == 4000, "the note cost is part of the remaining cost");
 
 		bool foundNotes = false;
 		bool foundIngredients = false;
@@ -595,13 +597,13 @@ namespace
 			if (entry.Id == kResearchNoteCurrency)
 			{
 				foundNotes = true;
-				Check(entry.UnitCost == 200 && entry.TotalCost == 50000, "the note line carries the per-note ingredient cost");
+				Check(entry.UnitCost == 16 && entry.TotalCost == 4000, "the note line carries the per-note ingredient cost");
 				Check(entry.SourceDetail.find("Rabid Draconic Gauntlets") != std::string::npos, "the note line names the item it is crafted from");
 			}
 			if (entry.Id == 1)
 			{
 				foundIngredients = true;
-				Check(entry.Quantity == 500 && entry.TotalCost == 50000, "the source ingredients are listed for the whole batch");
+				Check(entry.Quantity == 40 && entry.TotalCost == 4000, "the source ingredients are listed for the whole batch");
 				Check(entry.ResearchNotes, "the source ingredients are marked as being for research notes");
 			}
 		}
@@ -619,7 +621,7 @@ namespace
 			Check(step.Action == CraftAction::Craft || step.Action == CraftAction::MysticForge, "purchases are not part of the crafting steps");
 			if (step.Action == CraftAction::Craft && step.Name == "Rabid Draconic Gauntlets")
 			{
-				foundSourceCraft = step.ResearchNotes && step.Quantity == 50;
+				foundSourceCraft = step.ResearchNotes && step.Quantity == 4;
 			}
 		}
 		Check(foundSourceCraft, "the source craft joins the crafting steps");
@@ -640,24 +642,25 @@ namespace
 		}
 		Check(foundNoteStation, "the note craft gets its own station group");
 
-		// Two candidate crafts: the cheapest one per note wins.
+		// Two candidate crafts: the cheaper bill for the notes wins.
 		items[48602].Id = 48602;
 		items[48602].Name = "Dire Draconic Gauntlets";
 		items[48602].Rarity = "Exotic";
 		items[48602].Level = 80;
+		items[48602].Type = "Armor";
 		const RecipeNode cheaper = Recipe(48602, 1, 1, { ItemNode(1, 4) }, "Leatherworker");
 		sources.push_back(cheaper);
 		const Plan cheapest = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
-		Check(cheapest.ResearchNoteSourceName == "Dire Draconic Gauntlets", "the cheapest source per note is picked automatically");
-		Check(cheapest.ResearchNoteCost == 20000, "the notes are charged at the cheapest source's ingredient cost");
+		Check(cheapest.ResearchNoteSourceName == "Dire Draconic Gauntlets", "the cheapest source is picked automatically");
+		Check(cheapest.ResearchNoteCost == 1600, "the notes are charged at the cheapest source's ingredient cost");
 
 		// Notes already in the wallet only pay for the crafts still needed.
 		AccountData account;
 		account.Valid = true;
 		account.Currencies[kResearchNoteCurrency] = 50;
 		const Plan partlyOwned = BuildPlan(root, 1, items, prices, currencies, account, options, {});
-		Check(partlyOwned.ResearchNotesNeeded == 200 && partlyOwned.ResearchNoteCrafts == 40, "owned notes reduce the crafts needed");
-		Check(partlyOwned.ResearchNoteCost == 16000, "only the missing notes are priced");
+		Check(partlyOwned.ResearchNotesNeeded == 200 && partlyOwned.ResearchNoteCrafts == 3, "owned notes reduce the crafts needed");
+		Check(partlyOwned.ResearchNoteCost == 1200, "only the missing notes are priced");
 
 		// Without a candidate source the notes are listed without a price.
 		PlanOptions fallback;
@@ -666,9 +669,9 @@ namespace
 		Check(flat.ResearchNoteCost == 0 && flat.ResearchNoteSourceName.empty(), "notes stay unpriced when no source recipe is available");
 	}
 
-	// Fine gear is a research note source in its own right: fewer notes per
-	// craft, but a cheap craft can still beat an exotic source per note.
-	void TestCheapFineSourceBeatsExotic()
+	// The measured salvage research decides what a source craft returns, so the
+	// cheapest note source is a matter of notes per craft and craft cost together.
+	void TestNoteYieldAndCheapestSource()
 	{
 		ItemDb items;
 		items[1].Id = 1;
@@ -711,10 +714,55 @@ namespace
 
 		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
 		Check(plan.ResearchNotesNeeded == 20, "the plan prices the notes it needs");
-		Check(plan.ResearchNoteYield == 1, "a fine-rarity source is priced at one note per craft");
-		Check(plan.ResearchNoteSourceName == "Barbaric Helm", "the cheaper fine source beats the exotic one");
-		Check(plan.ResearchNoteCrafts == 20, "a fine source needs one craft per note");
-		Check(plan.ResearchNoteCost == 2000, "the fine source is charged at its own ingredient cost");
+		Check(plan.ResearchNoteYield == 5, "a level-70 fine source is priced at its measured yield");
+		Check(plan.ResearchNoteSourceName == "Barbaric Helm", "a cheap five-note craft beats an exotic one for a small batch");
+		Check(plan.ResearchNoteCrafts == 4, "twenty notes need four crafts at five notes each");
+		Check(plan.ResearchNoteCost == 400, "the winning source is charged at its own ingredient cost");
+
+		// A level-65 utility gives a single note, so a twenty-note batch costs
+		// twenty crafts of it.
+		PlanOptions utilityOptions = options;
+		items[400].Id = 400;
+		items[400].Name = "Potent Potion";
+		items[400].Rarity = "Fine";
+		items[400].Level = 65;
+		items[400].Type = "Consumable";
+		const RecipeNode utility = Recipe(400, 1, 1, { ItemNode(1, 10) }, "Artificer");
+		std::vector<RecipeNode> utilitySources = { utility };
+		utilityOptions.ResearchNoteSources = &utilitySources;
+		const Plan utilityPlan = BuildPlan(root, 1, items, prices, currencies, {}, utilityOptions, {});
+		Check(utilityPlan.ResearchNoteYield == 1 && utilityPlan.ResearchNoteCrafts == 20, "a crafted utility is researched one note at a time");
+		Check(utilityPlan.ResearchNoteCost == 20000, "twenty crafts of a utility are charged at their own cost");
+
+		// The measured exceptions carry their own figure: Peer Reviewed Research
+		// hands over 150 notes for a single craft.
+		PlanOptions researchOptions = options;
+		items[104934].Id = 104934;
+		items[104934].Name = "Peer Reviewed Research";
+		items[104934].Rarity = "Fine";
+		items[104934].Level = 0;
+		items[104934].Type = "Container";
+		const RecipeNode research = Recipe(104934, 1, 1, { ItemNode(1, 2) }, "Scribe");
+		std::vector<RecipeNode> researchSources = { research, exotic };
+		researchOptions.ResearchNoteSources = &researchSources;
+		const Plan researchPlan = BuildPlan(root, 1, items, prices, currencies, {}, researchOptions, {});
+		Check(researchPlan.ResearchNoteSourceName == "Peer Reviewed Research", "the measured source is priced from its own figure");
+		Check(researchPlan.ResearchNoteYield == 150 && researchPlan.ResearchNoteCrafts == 1, "its 150 notes cover the small batch in one craft");
+		Check(researchPlan.ResearchNoteCost == 200, "it is charged at its own ingredient cost");
+
+		// The model behind those figures, at the levels, rarities and types the
+		// wiki's salvage research reports.
+		Check(ResearchNoteYieldFor(70, "Fine", "Armor", "Coat") == 5, "fine level-70 gear returns about five notes");
+		Check(ResearchNoteYieldFor(75, "Masterwork", "Trinket", "Earring") == 5, "masterwork level-75 jewellery returns five");
+		Check(ResearchNoteYieldFor(65, "Rare", "Trinket", "Amulet") == 3, "level-65 gear returns three");
+		Check(ResearchNoteYieldFor(80, "Exotic", "Armor", "Coat") == 75, "level-80 exotic armor returns about seventy-five");
+		Check(ResearchNoteYieldFor(80, "Exotic", "Weapon", "Sword") == 45, "level-80 exotic weapons return about forty-five");
+		Check(ResearchNoteYieldFor(80, "Exotic", "Trinket", "Earring") == 80, "exotic trinkets return about eighty");
+		Check(ResearchNoteYieldFor(65, "Fine", "Consumable", "Utility") == 1, "crafted utilities return a single note");
+		Check(ResearchNoteYieldFor(50, "Exotic", "Armor", "Coat") == 1, "gear below level 60 returns a single note");
+		Check(ResearchNoteYieldOverride(104934) == 150, "Peer Reviewed Research keeps its measured 150");
+		Check(ResearchNoteYieldOverride(13435) == 10, "a measured earring keeps its own figure");
+		Check(ResearchNoteYieldOverride(48601) == 0, "unmeasured items follow level, rarity and type");
 	}
 
 	void TestStepGroups()
@@ -988,7 +1036,7 @@ int main()
 	TestAchievementIngredients();
 	TestResearchNoteCost();
 	TestResearchNotesFromSourceRecipe();
-	TestCheapFineSourceBeatsExotic();
+	TestNoteYieldAndCheapestSource();
 	TestStepGroups();
 	TestStepsFollowDependencies();
 	TestParseRecipeTree();

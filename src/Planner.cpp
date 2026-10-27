@@ -436,6 +436,14 @@ namespace mc
 			return result;
 		}
 
+		// The notes a source craft returns: a figure the community measured for the
+		// item where there is one, otherwise what its level, rarity and type imply.
+		int NoteYieldForItem(const ItemInfo& aItem)
+		{
+			const int measured = ResearchNoteYieldOverride(aItem.Id);
+			return measured > 0 ? measured : ResearchNoteYieldFor(aItem.Level, aItem.Rarity, aItem.Type, aItem.Subtype);
+		}
+
 		// Research notes are a wallet currency earned by crafting at a crafting
 		// station, so the plan prices the notes it still needs from the cost of
 		// crafting the recipe that gets researched. The configured price per note
@@ -451,7 +459,8 @@ namespace mc
 			}
 
 			// Every candidate source is costed for the notes still missing, and the
-			// one with the lowest cost per note wins.
+			// one whose whole craft bill comes to the least wins, which is the same
+			// ordering as the lowest cost per note without rounding it down.
 			PlanOptions sourceOptions = aContext.Options;
 			sourceOptions.IncludeResearchNotes = false;
 			sourceOptions.IncludeAccountItems = false;
@@ -476,7 +485,7 @@ namespace mc
 						continue;
 					}
 
-					const int candidateYield = ResearchNoteYieldFor(info->second.Level, info->second.Rarity);
+					const int candidateYield = NoteYieldForItem(info->second);
 					const i64 candidateCrafts = (needed + candidateYield - 1) / candidateYield;
 
 					// Notes only come from crafting the item at a station, so buying
@@ -498,7 +507,9 @@ namespace mc
 					{
 						continue;
 					}
-					const i64 candidateUnit = candidatePlan.FullCost / (candidateCrafts * candidateYield);
+					// Comparing totals rather than a rounded cost per note keeps a
+					// cheaper source from losing on an uneven division.
+					const i64 candidateUnit = candidatePlan.FullCost;
 					if (bestSource == nullptr || candidateUnit < bestUnitCost)
 					{
 						bestSource = &candidate;

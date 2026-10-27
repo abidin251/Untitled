@@ -14,14 +14,25 @@ namespace mc
 	constexpr int kCoinCurrency = 1;
 	constexpr int kResearchNoteCurrency = 61;
 
-	// Crafted items that are cheap to make and are researched into notes: fine,
-	// masterwork, rare and exotic pieces. The planner prices every one of them
-	// and keeps the cheapest per note.
+	// Crafted items that are cheap to make and are researched into notes: the
+	// cheap fine and masterwork jewellery, the fine, masterwork and rare gear, the
+	// level-80 exotics and Peer Reviewed Research, which hands its notes over as it
+	// is crafted. The planner prices every one of them and keeps the cheapest.
 	const std::vector<int>& ResearchNoteSourceCandidates();
 
-	// Notes a research kit returns for an item of this level and rarity: five for
-	// a level-80 exotic, fewer for lower levels and rarities.
-	int ResearchNoteYieldFor(int aLevel, const std::string& aRarity);
+	// Notes a research kit returns for a salvaged crafted item of this level,
+	// rarity and type. The figures follow the salvage research the community
+	// measured and the wiki records: fine, masterwork and rare gear of level 70
+	// and up gives about five notes and level 60 to 69 gear about three, level-80
+	// exotic armor and back items about seventy-five, exotic weapons about
+	// forty-five, exotic trinkets about eighty, and crafted food, utilities and
+	// potions a single note.
+	int ResearchNoteYieldFor(int aLevel, const std::string& aRarity, const std::string& aType, const std::string& aSubtype);
+
+	// Measured notes for the items whose salvage research is known item by item
+	// (Peer Reviewed Research hands its notes over directly), or zero when the
+	// level, rarity and type are the guide.
+	int ResearchNoteYieldOverride(int aItemId);
 
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
