@@ -989,6 +989,66 @@ namespace
 		Check(root.Components.size() == 1 && root.Components[0].IsCurrency(), "the merchant price is a currency component");
 	}
 
+	// A merchant exchange paid in items puts what is handed over on the list; the
+	// item itself is not listed again, since its ingredients are already there.
+	void TestVendorExchangeWithListedIngredients()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Mystic Gift";
+		items[300].Id = 300;
+		items[300].Name = "Mystic Runestone";
+		items[1].Id = 1;
+		items[1].Name = "Orichalcum Ingot";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		RecipeNode exchange;
+		exchange.Id = 300;
+		exchange.Type = "Recipe";
+		exchange.Quantity = 2;
+		exchange.Output = 1;
+		exchange.Disciplines = { "Merchant" };
+		exchange.MerchantName = "Miyani";
+		exchange.MerchantLocations = "Lion's Arch";
+		exchange.Components = { ItemNode(1, 2) };
+
+		const RecipeNode root = Recipe(100, 1, 1, { exchange }, "Weaponsmith");
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
+
+		Check(plan.RemainingCost == 400, "a merchant exchange is costed from what it consumes");
+		bool foundItem = false;
+		bool foundIngredient = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			foundItem = foundItem || entry.Id == 300;
+			if (entry.Id == 1)
+			{
+				foundIngredient = true;
+				Check(entry.Quantity == 4 && entry.TotalCost == 400, "the exchange ingredients are listed for the whole batch");
+			}
+		}
+		Check(foundIngredient, "the ingredients a merchant exchange consumes appear on the list");
+		Check(!foundItem, "an item whose ingredients are listed is not listed again");
+
+		// A merchant that just charges coin keeps its own line: the coin it asks
+		// for is not an item on the shopping list.
+		const RecipeNode coin = MerchantRecipe(301, 1, 1, 5000, "Rojan the Penitent", "Earthshake Basin");
+		items[301].Id = 301;
+		items[301].Name = "Icy Runestone";
+		const Plan paid = BuildPlan(Recipe(100, 1, 1, { coin }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		bool foundCoinItem = false;
+		for (const auto& entry : paid.Shopping)
+		{
+			foundCoinItem = foundCoinItem || entry.Id == 301;
+		}
+		Check(foundCoinItem, "an item bought with coin stays on the shopping list");
+	}
+
 	void TestParseItemsAndPrices()
 	{
 		const std::string itemsJson = R"([
@@ -1033,6 +1093,7 @@ int main()
 	TestCraftingSteps();
 	TestCombinedStepsForTrackedGoals();
 	TestVendorIngredients();
+	TestVendorExchangeWithListedIngredients();
 	TestAchievementIngredients();
 	TestResearchNoteCost();
 	TestResearchNotesFromSourceRecipe();

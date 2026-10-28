@@ -187,6 +187,11 @@ namespace mc
 			{
 				return it->second.Name;
 			}
+			// Coin is not a wallet currency in the API, but plans report it.
+			if (aId == kCoinCurrency)
+			{
+				return "Coin";
+			}
 			return "Currency #" + std::to_string(aId);
 		}
 
@@ -1043,9 +1048,21 @@ namespace mc
 						rows[pair.first] = pair.second;
 					}
 				}
+				// Trading Post purchases are coin the player has to hold as well, so
+				// the Coin line carries them next to what merchants charge in coin.
+				if (tradingPostTotal > 0)
+				{
+					rows[kCoinCurrency] += tradingPostTotal;
+				}
 				for (const auto& pair : rows)
 				{
 					if (pair.second <= 0)
+					{
+						continue;
+					}
+					// The notes are crafted rather than paid for, so their wallet line
+					// would only repeat what the note craft already covers.
+					if (aApp.Settings.IncludeResearchNotes && pair.first == kResearchNoteCurrency)
 					{
 						continue;
 					}
@@ -1054,6 +1071,10 @@ namespace mc
 					if (missingIt != plan->CurrencyNeeded.end())
 					{
 						missing = missingIt->second;
+					}
+					if (pair.first == kCoinCurrency && tradingPostTotal > 0)
+					{
+						missing += tradingPostTotal;
 					}
 					i64 owned = 0;
 					auto ownedIt = plan->CurrencyOwned.find(pair.first);
@@ -1210,7 +1231,16 @@ namespace mc
 				return;
 			}
 
-			const std::vector<CraftStepGroup> groups = BuildStepGroups(*plan);
+			// Folding the steps into visits copies names and sorts them, so it is done
+			// once per plan instead of on every frame.
+			static std::shared_ptr<const Plan> cachedPlan;
+			static std::vector<CraftStepGroup> cachedGroups;
+			if (cachedPlan.get() != plan.get())
+			{
+				cachedPlan = plan;
+				cachedGroups = BuildStepGroups(*plan);
+			}
+			const std::vector<CraftStepGroup>& groups = cachedGroups;
 			int totalSteps = 0;
 			i64 groupCost = 0;
 			for (const auto& group : groups)
@@ -1600,7 +1630,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.1 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.2 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "
@@ -1678,7 +1708,17 @@ namespace mc
 
 	void RenderMain(App& aApp)
 	{
-		const UiSnapshot snapshot = TakeSnapshot(aApp);
+		// The snapshot copies the catalog, the account stacks and the currencies, so
+		// it is rebuilt when the worker publishes something rather than per frame.
+		static UiSnapshot cachedSnapshot;
+		static int cachedRevision = -1;
+		const int revision = aApp.DataRevision.load();
+		if (revision != cachedRevision)
+		{
+			cachedSnapshot = TakeSnapshot(aApp);
+			cachedRevision = revision;
+		}
+		const UiSnapshot& snapshot = cachedSnapshot;
 
 		ImGui::SetNextWindowSize(ImVec2(1220.0f, 780.0f), ImGuiCond_FirstUseEver);
 		if (!ImGui::Begin("Mystic Crafting", &aApp.Visible, ImGuiWindowFlags_NoCollapse))

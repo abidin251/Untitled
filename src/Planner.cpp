@@ -5,6 +5,7 @@
 #include <functional>
 #include <limits>
 #include <queue>
+#include <set>
 #include <utility>
 
 namespace mc
@@ -436,6 +437,77 @@ namespace mc
 			return result;
 		}
 
+		// A row is dropped when the plan obtains the item from ingredients the list
+		// already carries: a merchant exchange paid in items would otherwise put
+		// the item and what is handed over for it on the list at the same time. Only
+		// merchant lines are dropped, since a purchase of an item whose ingredients
+		// a different goal buys is still coin the player has to spend.
+		void DropRowsWithListedIngredients(Plan& aPlan)
+		{
+			if (aPlan.Shopping.empty())
+			{
+				return;
+			}
+
+			std::set<int> listed;
+			for (const auto& row : aPlan.Shopping)
+			{
+				listed.insert(row.Id);
+			}
+
+			std::set<int> covered;
+			std::function<void(const PlanNode&)> walk = [&](const PlanNode& aNode) {
+				if (!aNode.IsCurrency && !aNode.Children.empty())
+				{
+					bool hasItemChild = false;
+					bool allListed = true;
+					for (const auto& child : aNode.Children)
+					{
+						if (child.IsCurrency)
+						{
+							continue;
+						}
+						hasItemChild = true;
+						if (listed.find(child.Id) == listed.end())
+						{
+							allListed = false;
+							break;
+						}
+					}
+					// An item paid for with coin is not covered: the coin it costs is
+					// a wallet line, not an item row.
+					if (hasItemChild && allListed)
+					{
+						covered.insert(aNode.Id);
+					}
+				}
+				for (const auto& child : aNode.Children)
+				{
+					walk(child);
+				}
+			};
+			walk(aPlan.Root);
+			for (const auto& root : aPlan.GoalRoots)
+			{
+				walk(root);
+			}
+			for (const auto& root : aPlan.NoteRoots)
+			{
+				walk(root);
+			}
+
+			if (covered.empty())
+			{
+				return;
+			}
+
+			aPlan.Shopping.erase(
+				std::remove_if(aPlan.Shopping.begin(), aPlan.Shopping.end(), [&covered](const ShoppingItem& aRow) {
+					return aRow.Source == SourceKind::Vendor && covered.count(aRow.Id) > 0;
+				}),
+				aPlan.Shopping.end());
+		}
+
 		// The notes a source craft returns: a figure the community measured for the
 		// item where there is one, otherwise what its level, rarity and type imply.
 		int NoteYieldForItem(const ItemInfo& aItem)
@@ -467,9 +539,9 @@ namespace mc
 			sourceOptions.ResearchNoteSources = nullptr;
 
 			const RecipeNode* bestSource = nullptr;
-			Plan bestPlan;
 			int bestYield = 0;
 			i64 bestCrafts = 0;
+			i64 bestPerCraft = 0;
 			i64 bestUnitCost = 0;
 			if (aContext.Options.ResearchNoteSources)
 			{
@@ -493,9 +565,12 @@ namespace mc
 					std::map<int, Preference> sourcePreferences = aContext.Preferences;
 					sourcePreferences[candidate.Id] = Preference::Craft;
 
+					// A single craft is enough to rank a candidate: the bill grows with
+					// the batch, so ranking a hundred sources costs one small walk each
+					// instead of a full batch plan per source.
 					const Plan candidatePlan = BuildPlan(
 						candidate,
-						static_cast<int>(std::min<i64>(candidateCrafts, std::numeric_limits<int>::max())),
+						1,
 						aContext.Items,
 						aContext.Prices,
 						aContext.Currencies,
@@ -507,31 +582,49 @@ namespace mc
 					{
 						continue;
 					}
-					// Comparing totals rather than a rounded cost per note keeps a
+					// Comparing whole bills rather than a rounded cost per note keeps a
 					// cheaper source from losing on an uneven division.
-					const i64 candidateUnit = candidatePlan.FullCost;
+					const i64 candidateUnit = candidatePlan.FullCost * candidateCrafts;
 					if (bestSource == nullptr || candidateUnit < bestUnitCost)
 					{
 						bestSource = &candidate;
-						bestPlan = candidatePlan;
 						bestYield = candidateYield;
 						bestCrafts = candidateCrafts;
+						bestPerCraft = candidatePlan.FullCost;
 						bestUnitCost = candidateUnit;
 					}
 				}
 			}
 
+			// Only the winner is planned for the whole batch, once, so the shopping
+			// rows and the craft that joins the steps are exact.
+			Plan bestPlan;
+			if (bestSource != nullptr)
+			{
+				std::map<int, Preference> sourcePreferences = aContext.Preferences;
+				sourcePreferences[bestSource->Id] = Preference::Craft;
+				bestPlan = BuildPlan(
+					*bestSource,
+					static_cast<int>(std::min<i64>(bestCrafts, std::numeric_limits<int>::max())),
+					aContext.Items,
+					aContext.Prices,
+					aContext.Currencies,
+					AccountData{},
+					sourceOptions,
+					sourcePreferences);
+			}
+
 			i64 unitCost = 0;
 			std::string sourceName;
 			std::vector<ShoppingItem> ingredients;
-			const bool priced = bestSource != nullptr;
+			const bool priced = bestSource != nullptr && bestPlan.FullCost > 0;
 			if (priced)
 			{
 				sourceName = bestPlan.GoalName;
 				unitCost = bestPlan.FullCost / needed;
 				aPlan.ResearchNoteCost = bestPlan.FullCost;
 				aPlan.RemainingCost += bestPlan.FullCost;
-				aPlan.FullCost += (bestPlan.FullCost / std::max<i64>(1, bestCrafts)) * ((aFullRequired + bestYield - 1) / bestYield);
+				aPlan.FullCost += bestPerCraft * ((aFullRequired + bestYield - 1) / bestYield);
 				aPlan.ResearchNoteSourceName = sourceName;
 				aPlan.ResearchNoteYield = bestYield;
 				aPlan.ResearchNoteCrafts = static_cast<int>(std::min<i64>(bestCrafts, std::numeric_limits<int>::max()));
@@ -639,32 +732,43 @@ namespace mc
 		plan.Complete = plan.Root.Complete;
 
 		// A second pass from scratch gives the denominator for progress and the
-		// "total cost if you owned nothing" figure.
-		PlanOptions fullOptions = aOptions;
-		fullOptions.IncludeAccountItems = false;
-		AccountData emptyAccount;
-		PlanContext fullContext{
-			aItems,
-			aPrices,
-			aCurrencies,
-			emptyAccount,
-			fullOptions,
-			aPreferences,
-			{},
-			{},
-			{},
-			{},
-			{},
-			0,
-			false
-		};
-		const PlanNode fullRoot = BuildNode(fullContext, root, 0);
-		plan.FullCost = fullRoot.TotalCost;
+		// "total cost if you owned nothing" figure. Ownership is the only thing the
+		// second pass changes, so without it the first pass already is that number.
+		i64 fullNotesRequired = context.CurrencyRequired[kResearchNoteCurrency];
+		if (aOptions.IncludeAccountItems)
+		{
+			PlanOptions fullOptions = aOptions;
+			fullOptions.IncludeAccountItems = false;
+			AccountData emptyAccount;
+			PlanContext fullContext{
+				aItems,
+				aPrices,
+				aCurrencies,
+				emptyAccount,
+				fullOptions,
+				aPreferences,
+				{},
+				{},
+				{},
+				{},
+				{},
+				0,
+				false
+			};
+			const PlanNode fullRoot = BuildNode(fullContext, root, 0);
+			plan.FullCost = fullRoot.TotalCost;
+			fullNotesRequired = fullContext.CurrencyRequired[kResearchNoteCurrency];
+		}
+		else
+		{
+			plan.FullCost = plan.RemainingCost;
+		}
 
 		plan.Shopping = AggregateShopping(context.Shopping);
 		// Research note lines are appended after aggregation so their own cost
 		// lines never merge with the ingredient they happen to share an id with.
-		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullContext.CurrencyRequired[kResearchNoteCurrency]);
+		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullNotesRequired);
+		DropRowsWithListedIngredients(plan);
 
 		return plan;
 	}
@@ -1322,6 +1426,7 @@ namespace mc
 		}
 
 		combined.Shopping = AggregateShopping(entries);
+		DropRowsWithListedIngredients(combined);
 		combined.CurrencyOwned = aAccount.Currencies;
 		combined.Complete = combined.RemainingCost == 0;
 		if (names.size() == 1)

@@ -47,6 +47,14 @@ namespace mc
 
 		std::string Status = "Starting up...";
 		std::string LastError;
+		// Bumped whenever the worker publishes something the interface shows, so the
+		// render thread can reuse its snapshot instead of copying the data per frame.
+		std::atomic<int> DataRevision{ 0 };
+		// Parsed recipe trees of the research note source candidates, kept for the
+		// session: re-reading and re-parsing them on every plan rebuild was the
+		// slowest part of loading a plan.
+		std::vector<RecipeNode> NoteSources;
+		bool NoteSourcesLoaded = false;
 		std::atomic<bool> Busy{ false };
 		std::atomic<bool> ToggleRequested{ false };
 		std::atomic<bool> ForcePriceRefresh{ false };
@@ -99,7 +107,7 @@ namespace mc
 		bool LoadRecipeTree(int aItemId, bool aForce, const UserSettings& aSettings, RecipeNode& aRoot, std::string& aError, std::string& aWarning);
 		// Loads the recipes whose crafts become research notes and appends their
 		// item ids to the fetch list. False means the notes cannot be priced.
-		bool LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut);
+		bool LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut, bool aForce);
 		void LoadPlanJob(int aItemId, bool aForce, const UserSettings& aSettings);
 		void BuildTrackedPlanJob(const UserSettings& aSettings);
 		void SyncAccountJob(const UserSettings& aSettings, int aGoalId);

@@ -155,6 +155,7 @@ namespace mc
 		std::lock_guard<std::mutex> lock(Mutex);
 		Status = aStatus;
 		LastError = aError;
+		++DataRevision;
 		if (!aError.empty() && Api)
 		{
 			Api->Log(LOGL_WARNING, "MysticCrafting", aError.c_str());
@@ -391,6 +392,7 @@ namespace mc
 			}
 			CurrenciesFetchedAt = NowUnix();
 			store::SaveCurrencies(CacheDirectory / "currencies.json", Currencies, CurrenciesFetchedAt);
+			++DataRevision;
 		}
 		return true;
 	}
@@ -447,6 +449,7 @@ namespace mc
 
 		std::lock_guard<std::mutex> lock(Mutex);
 		Catalog = std::move(catalog);
+		++DataRevision;
 	}
 
 	void App::RebuildKnownOwnership()
@@ -457,6 +460,7 @@ namespace mc
 			entry.Owned = Account.Items.find(entry.Id) != Account.Items.end() && Account.Items[entry.Id] > 0;
 			KnownOwned[entry.Id] = entry.Owned;
 		}
+		++DataRevision;
 	}
 
 	void App::ReloadCatalog(bool aForce)
@@ -558,13 +562,27 @@ namespace mc
 	// the craft convert into notes, so the plan prices them from the ingredients
 	// of that craft. Every cheap candidate is loaded so the planner can keep
 	// whichever turns out to be the cheapest per note.
-	bool App::LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut)
+	bool App::LoadResearchNoteSources(const UserSettings& aSettings, std::vector<int>& aItemIds, std::vector<RecipeNode>& aOut, bool aForce)
 	{
 		if (!aSettings.IncludeResearchNotes)
 		{
 			return false;
 		}
 
+		// The candidate trees are parsed once per session: a plan rebuild otherwise
+		// re-reads the same hundred recipes from the cache directory.
+		if (!aForce && NoteSourcesLoaded)
+		{
+			for (const auto& node : NoteSources)
+			{
+				const std::vector<int> ids = CollectRecipeItemIds(node);
+				aItemIds.insert(aItemIds.end(), ids.begin(), ids.end());
+				aOut.push_back(node);
+			}
+			return !aOut.empty();
+		}
+
+		NoteSources.clear();
 		for (int id : ResearchNoteSourceCandidates())
 		{
 			std::string error;
@@ -578,9 +596,14 @@ namespace mc
 
 			const std::vector<int> ids = CollectRecipeItemIds(node);
 			aItemIds.insert(aItemIds.end(), ids.begin(), ids.end());
-			aOut.push_back(std::move(node));
+			NoteSources.push_back(std::move(node));
 		}
+		NoteSourcesLoaded = true;
 
+		for (const auto& node : NoteSources)
+		{
+			aOut.push_back(node);
+		}
 		return !aOut.empty();
 	}
 
@@ -596,6 +619,7 @@ namespace mc
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
 			TrackedPlan.reset();
+			++DataRevision;
 			return;
 		}
 
@@ -617,6 +641,7 @@ namespace mc
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
 			TrackedPlan.reset();
+			++DataRevision;
 			return;
 		}
 
@@ -628,7 +653,7 @@ namespace mc
 		}
 
 		std::vector<RecipeNode> researchSources;
-		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources);
+		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources, false);
 
 		std::string dependencyError;
 		EnsureCurrencies(dependencyError);
@@ -671,6 +696,7 @@ namespace mc
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
 			TrackedPlan = pointer;
+			++DataRevision;
 		}
 	}
 
@@ -691,10 +717,10 @@ namespace mc
 			return;
 		}
 
-		std::string dependencyError;
 		std::vector<int> itemIds = CollectRecipeItemIds(root);
 		std::vector<RecipeNode> researchSources;
-		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources);
+		const bool hasResearchSources = LoadResearchNoteSources(aSettings, itemIds, researchSources, aForce);
+		std::string dependencyError;
 		EnsureCurrencies(dependencyError);
 		EnsureItems(itemIds, dependencyError);
 		EnsurePrices(itemIds, dependencyError);
@@ -742,6 +768,7 @@ namespace mc
 			knownCosts = KnownCosts;
 		}
 		store::SavePlanCosts(CacheDirectory / "plan-costs.json", knownCosts);
+		++DataRevision;
 
 		std::string finalError = dependencyError;
 		if (finalError.empty())
@@ -977,6 +1004,9 @@ namespace mc
 				PricesFetchedAt = 0;
 				CurrenciesFetchedAt = 0;
 				CatalogFetchedAt = 0;
+				NoteSources.clear();
+				NoteSourcesLoaded = false;
+				++DataRevision;
 			}
 			SetStatus("Cache cleared.");
 			Notify("Mystic Crafting cache cleared.");
@@ -1098,7 +1128,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 9, 1, 0 };
+	g_Definition.Version = { 1, 9, 2, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;
