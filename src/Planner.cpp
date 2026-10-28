@@ -215,6 +215,31 @@ namespace mc
 			return static_cast<int>(std::ceil(aValue - 1e-9));
 		}
 
+		// An item an achievement unlocks is not work at a station, so it is reported
+		// for the steps warning wherever it sits in the tree. Some of them come with
+		// a component list as well - the acquisition graph offers the Mystic Forge
+		// route next to the achievement - which used to take the recipe path and
+		// lose the warning.
+		void AddAchievementNeed(PlanContext& aContext, const PlanNode& aNode, const RecipeNode& aRecipe)
+		{
+			const bool achievement = aRecipe.AchievementId != 0 || KindForRecipe(aRecipe) == SourceKind::Achievement;
+			if (!achievement || aNode.Remaining <= 0)
+			{
+				return;
+			}
+
+			AchievementNeed need;
+			need.ItemId = aNode.Id;
+			need.ItemName = aNode.Name;
+			need.Icon = aNode.Icon;
+			need.Quantity = aNode.Remaining;
+			need.AchievementId = aRecipe.AchievementId;
+			need.Detail = aRecipe.AchievementId != 0
+				? "Achievement #" + std::to_string(aRecipe.AchievementId)
+				: "Achievement";
+			aContext.AchievementNeeds.push_back(std::move(need));
+		}
+
 		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
 		{
 			PlanNode node;
@@ -364,6 +389,7 @@ namespace mc
 						node.MerchantDetail = MerchantLabel(aNode);
 						AddVendorRow(aContext, node, aNode);
 					}
+					AddAchievementNeed(aContext, node, aNode);
 				}
 				return node;
 			}
@@ -388,17 +414,7 @@ namespace mc
 				// Nothing to buy, but the ingredient still belongs on the shopping list,
 				// and the steps warn about it before the station work begins.
 				AddShoppingRow(aContext, node, SourceKind::Achievement, 0, 0);
-				if (node.Remaining > 0)
-				{
-					AchievementNeed need;
-					need.ItemId = node.Id;
-					need.ItemName = node.Name;
-					need.Icon = node.Icon;
-					need.Quantity = node.Remaining;
-					need.AchievementId = aNode.AchievementId;
-					need.Detail = node.SourceDetail;
-					aContext.AchievementNeeds.push_back(std::move(need));
-				}
+				AddAchievementNeed(aContext, node, aNode);
 			}
 			else if (!aNode.MerchantName.empty())
 			{

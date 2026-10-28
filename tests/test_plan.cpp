@@ -1024,6 +1024,54 @@ namespace
 		Check(root.Components.size() == 1 && root.Components[0].IsCurrency(), "the merchant price is a currency component");
 	}
 
+	// Some achievement items arrive with a component list as well, because the
+	// acquisition graph offers the Mystic Forge route next to the achievement.
+	// They must still be warned about, and must not become a station step.
+	void TestAchievementWithComponents()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Klobjarne Geirr";
+		items[103766].Id = 103766;
+		items[103766].Name = "Memory of the Bearkin's Hunts";
+		items[68063].Id = 68063;
+		items[68063].Name = "Mystic Clover";
+		items[1].Id = 1;
+		items[1].Name = "Obsidian Shard";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 2000;
+
+		RecipeNode clover = Recipe(68063, 25, 1, { ItemNode(1, 1) }, "Mystic Forge");
+		RecipeNode memory;
+		memory.Id = 103766;
+		memory.Type = "Recipe";
+		memory.Quantity = 1;
+		memory.Output = 1;
+		memory.AchievementId = 8449;
+		memory.Disciplines = { "Achievement", "Merchant" };
+		memory.Components = { clover };
+
+		const RecipeNode root = Recipe(100, 1, 1, { memory }, "Mystic Forge");
+		PlanOptions options;
+		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
+
+		Check(plan.AchievementNeeds.size() == 1, "an achievement item with components still raises a warning");
+		if (!plan.AchievementNeeds.empty())
+		{
+			Check(plan.AchievementNeeds[0].ItemId == 103766, "the warning names the achievement item");
+			Check(plan.AchievementNeeds[0].Quantity == 1, "the warning carries the amount still missing");
+			Check(plan.AchievementNeeds[0].Detail == "Achievement #8449", "the warning carries the achievement id");
+		}
+
+		const std::vector<CraftStep> steps = BuildCraftingSteps(plan);
+		for (const auto& step : steps)
+		{
+			Check(step.Name != "Memory of the Bearkin's Hunts", "an achievement item is not a crafting step");
+		}
+	}
+
 	// A merchant exchange paid in items puts what is handed over on the list; the
 	// item itself is not listed again, since its ingredients are already there.
 	void TestVendorExchangeWithListedIngredients()
@@ -1129,6 +1177,7 @@ int main()
 	TestCombinedStepsForTrackedGoals();
 	TestVendorIngredients();
 	TestVendorExchangeWithListedIngredients();
+	TestAchievementWithComponents();
 	TestAchievementIngredients();
 	TestResearchNoteCost();
 	TestResearchNotesFromSourceRecipe();
