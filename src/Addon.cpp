@@ -94,6 +94,7 @@ namespace mc
 		store::LoadItems(CacheDirectory / "items.json", Items, ItemsFetchedAt);
 		store::LoadPrices(CacheDirectory / "prices.json", Prices, PricesFetchedAt);
 		store::LoadCurrencies(CacheDirectory / "currencies.json", Currencies, CurrenciesFetchedAt);
+		store::LoadAchievements(CacheDirectory / "achievements.json", Achievements, AchievementsFetchedAt);
 		store::LoadAccount(CacheDirectory / "account.json", Account);
 		store::LoadPlanCosts(CacheDirectory / "plan-costs.json", KnownCosts);
 
@@ -397,6 +398,85 @@ namespace mc
 		return true;
 	}
 
+	// The steps warning names the achievement an item comes from, which the
+	// acquisition graph only identifies by id. Names are fetched once per id and
+	// cached, and the plan keeps the id when a name is not known.
+	bool App::EnsureAchievements(const std::vector<int>& aIds, std::string& aError)
+	{
+		std::vector<int> missing;
+		{
+			std::lock_guard<std::mutex> lock(Mutex);
+			for (int id : UniqueIds(aIds))
+			{
+				if (Achievements.find(id) == Achievements.end())
+				{
+					missing.push_back(id);
+				}
+			}
+		}
+
+		if (missing.empty())
+		{
+			return true;
+		}
+
+		bool success = true;
+		for (std::size_t offset = 0; offset < missing.size(); offset += 200)
+		{
+			const std::size_t count = std::min<std::size_t>(200, missing.size() - offset);
+			const std::string path = "/v2/achievements?ids=" + ChunkIds(missing, offset, count);
+			const HttpResponse response = GetGw2(path, {});
+			if (!response.Ok())
+			{
+				aError += response.Error + "; ";
+				success = false;
+				continue;
+			}
+
+			const auto parsed = ParseAchievements(response.Body);
+			{
+				std::lock_guard<std::mutex> lock(Mutex);
+				for (const auto& achievement : parsed)
+				{
+					Achievements[achievement.Id] = achievement;
+				}
+			}
+		}
+
+		{
+			std::lock_guard<std::mutex> lock(Mutex);
+			AchievementsFetchedAt = NowUnix();
+			store::SaveAchievements(CacheDirectory / "achievements.json", Achievements, AchievementsFetchedAt);
+			++DataRevision;
+		}
+		return success;
+	}
+
+	void App::ResolveAchievements(Plan& aPlan, std::string& aError)
+	{
+		std::vector<int> ids;
+		for (const auto& need : aPlan.AchievementNeeds)
+		{
+			if (need.AchievementId != 0)
+			{
+				ids.push_back(need.AchievementId);
+			}
+		}
+		if (ids.empty())
+		{
+			return;
+		}
+
+		EnsureAchievements(ids, aError);
+
+		AchievementDb achievements;
+		{
+			std::lock_guard<std::mutex> lock(Mutex);
+			achievements = Achievements;
+		}
+		ApplyAchievementNames(aPlan, achievements);
+	}
+
 	std::vector<int> App::CollectRecipeItemIds(const RecipeNode& aRoot) const
 	{
 		std::vector<int> ids;
@@ -692,6 +772,8 @@ namespace mc
 		}
 
 		Plan combined = BuildCombinedPlan(roots, items, prices, currencies, account, options, preferences);
+		std::string achievementError;
+		ResolveAchievements(combined, achievementError);
 		auto pointer = std::make_shared<Plan>(std::move(combined));
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
@@ -757,6 +839,7 @@ namespace mc
 		}
 
 		Plan plan = BuildPlan(root, 1, items, prices, currencies, account, options, preferences);
+		ResolveAchievements(plan, dependencyError);
 		auto pointer = std::make_shared<Plan>(std::move(plan));
 
 		std::map<int, i64> knownCosts;
@@ -994,6 +1077,7 @@ namespace mc
 				Items.clear();
 				Prices.clear();
 				Currencies.clear();
+				Achievements.clear();
 				Catalog.clear();
 				Account = AccountData{};
 				CurrentPlan.reset();
@@ -1003,6 +1087,7 @@ namespace mc
 				ItemsFetchedAt = 0;
 				PricesFetchedAt = 0;
 				CurrenciesFetchedAt = 0;
+				AchievementsFetchedAt = 0;
 				CatalogFetchedAt = 0;
 				NoteSources.clear();
 				NoteSourcesLoaded = false;
@@ -1128,7 +1213,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 9, 4, 0 };
+	g_Definition.Version = { 1, 9, 5, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;

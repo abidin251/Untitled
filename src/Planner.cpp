@@ -826,6 +826,22 @@ namespace mc
 		return plan;
 	}
 
+	void ApplyAchievementNames(Plan& aPlan, const AchievementDb& aAchievements)
+	{
+		for (auto& need : aPlan.AchievementNeeds)
+		{
+			if (need.AchievementId == 0)
+			{
+				continue;
+			}
+			auto it = aAchievements.find(need.AchievementId);
+			if (it != aAchievements.end() && !it->second.Name.empty())
+			{
+				need.AchievementName = it->second.Name;
+			}
+		}
+	}
+
 	namespace
 	{
 		CraftAction ActionForNode(const PlanNode& aNode)

@@ -1055,7 +1055,7 @@ namespace
 
 		const RecipeNode root = Recipe(100, 1, 1, { memory }, "Mystic Forge");
 		PlanOptions options;
-		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
+		Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
 
 		Check(plan.AchievementNeeds.size() == 1, "an achievement item with components still raises a warning");
 		if (!plan.AchievementNeeds.empty())
@@ -1070,6 +1070,15 @@ namespace
 		{
 			Check(step.Name != "Memory of the Bearkin's Hunts", "an achievement item is not a crafting step");
 		}
+
+		// The warning shows the achievement's name once the API has it, and falls
+		// back to the id while it does not.
+		AchievementDb achievements;
+		achievements[8449].Id = 8449;
+		achievements[8449].Name = "Klobjarne Geirr: Raid or Convergence Victories";
+		ApplyAchievementNames(plan, achievements);
+		Check(!plan.AchievementNeeds.empty() && plan.AchievementNeeds[0].AchievementName == "Klobjarne Geirr: Raid or Convergence Victories", "the warning shows the achievement name instead of its id");
+		Check(plan.AchievementNeeds[0].Detail == "Achievement #8449", "the id is kept as the fallback");
 	}
 
 	// A merchant exchange paid in items puts what is handed over on the list; the
@@ -1152,6 +1161,13 @@ namespace
 		])";
 		const auto prices = ParsePrices(pricesJson);
 		Check(prices.size() == 1 && prices[0].Buy == 100 && prices[0].Sell == 200, "prices parse");
+
+		const std::string achievementsJson = R"([
+			{ "id": 8449, "name": "Klobjarne Geirr: Raid or Convergence Victories", "level": 80 }
+		])";
+		const auto achievements = ParseAchievements(achievementsJson);
+		Check(achievements.size() == 1 && achievements[0].Id == 8449, "achievement ids parse");
+		Check(achievements[0].Name == "Klobjarne Geirr: Raid or Convergence Victories", "achievement names parse");
 	}
 
 	void TestFormatting()

@@ -50,6 +50,8 @@ namespace mc
 		bool SavePrices(const std::filesystem::path& aPath, const PriceDb& aPrices, i64 aFetchedAt);
 		bool LoadCurrencies(const std::filesystem::path& aPath, CurrencyDb& aCurrencies, i64& aFetchedAt);
 		bool SaveCurrencies(const std::filesystem::path& aPath, const CurrencyDb& aCurrencies, i64 aFetchedAt);
+		bool LoadAchievements(const std::filesystem::path& aPath, AchievementDb& aAchievements, i64& aFetchedAt);
+		bool SaveAchievements(const std::filesystem::path& aPath, const AchievementDb& aAchievements, i64 aFetchedAt);
 		bool LoadAccount(const std::filesystem::path& aPath, AccountData& aAccount);
 		bool SaveAccount(const std::filesystem::path& aPath, const AccountData& aAccount);
 		bool LoadCatalog(const std::filesystem::path& aPath, std::vector<int>& aIds, i64& aFetchedAt);

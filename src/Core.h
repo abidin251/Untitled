@@ -209,8 +209,17 @@ namespace mc
 		std::string Icon;
 		int Quantity = 0;
 		int AchievementId = 0;
-		std::string Detail;   // "Achievement #2438"
+		std::string Detail;         // "Achievement #2438", the fallback
+		std::string AchievementName; // resolved through the API when it is known
 	};
+
+	struct AchievementInfo
+	{
+		int Id = 0;
+		std::string Name;
+	};
+
+	using AchievementDb = std::map<int, AchievementInfo>;
 
 	struct Plan
 	{

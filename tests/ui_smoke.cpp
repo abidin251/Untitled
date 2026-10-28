@@ -283,6 +283,7 @@ namespace
 		need.Quantity = 1;
 		need.AchievementId = 2438;
 		need.Detail = "Achievement #2438";
+		need.AchievementName = "Klobjarne Geirr: Raid or Convergence Victories";
 		plan->AchievementNeeds.push_back(need);
 		plan->ResearchNotesNeeded = 250;
 		plan->ResearchNoteCost = 50000;

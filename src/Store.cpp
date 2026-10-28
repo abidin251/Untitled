@@ -491,6 +491,53 @@ namespace mc
 			return WriteTextFile(aPath, parsed.dump());
 		}
 
+		bool LoadAchievements(const std::filesystem::path& aPath, AchievementDb& aAchievements, i64& aFetchedAt)
+		{
+			std::string contents;
+			if (!ReadTextFile(aPath, contents))
+			{
+				return false;
+			}
+			try
+			{
+				const json parsed = json::parse(contents);
+				aFetchedAt = parsed.value("fetched", static_cast<i64>(0));
+				if (!parsed.contains("achievements") || !parsed["achievements"].is_array())
+				{
+					return false;
+				}
+				for (const auto& object : parsed["achievements"])
+				{
+					AchievementInfo achievement;
+					achievement.Id = object.value("id", 0);
+					achievement.Name = object.value("name", std::string{});
+					if (achievement.Id != 0)
+					{
+						aAchievements[achievement.Id] = std::move(achievement);
+					}
+				}
+				return true;
+			}
+			catch (const std::exception&)
+			{
+				return false;
+			}
+		}
+
+		bool SaveAchievements(const std::filesystem::path& aPath, const AchievementDb& aAchievements, i64 aFetchedAt)
+		{
+			json achievements = json::array();
+			for (const auto& pair : aAchievements)
+			{
+				achievements.push_back({
+					{ "id", pair.second.Id },
+					{ "name", pair.second.Name },
+				});
+			}
+			json parsed{ { "fetched", aFetchedAt }, { "achievements", achievements } };
+			return WriteTextFile(aPath, parsed.dump());
+		}
+
 		bool LoadAccount(const std::filesystem::path& aPath, AccountData& aAccount)
 		{
 			std::string contents;

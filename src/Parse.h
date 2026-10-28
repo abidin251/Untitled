@@ -11,6 +11,7 @@ namespace mc
 	std::vector<ItemInfo> ParseItems(const std::string& aJson);
 	std::vector<PriceInfo> ParsePrices(const std::string& aJson);
 	std::vector<CurrencyInfo> ParseCurrencies(const std::string& aJson);
+	std::vector<AchievementInfo> ParseAchievements(const std::string& aJson);
 	std::vector<int> ParseIntArray(const std::string& aJson);
 	std::vector<std::string> ParseStringArray(const std::string& aJson);
 }

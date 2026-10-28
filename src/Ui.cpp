@@ -1175,7 +1175,8 @@ namespace mc
 				stream << "Before you start - unlock these first:\r\n";
 				for (const auto& need : aPlan.AchievementNeeds)
 				{
-					stream << "  " << need.Quantity << " x " << need.ItemName << " - " << need.Detail << " (not owned)\r\n";
+					const std::string achievement = need.AchievementName.empty() ? need.Detail : need.AchievementName;
+					stream << "  " << need.Quantity << " x " << need.ItemName << " - " << achievement << " (not owned)\r\n";
 				}
 				stream << "\r\n";
 			}
@@ -1294,7 +1295,8 @@ namespace mc
 					ImGui::SameLine(0, 4.0f);
 					ImGui::Text("%s x%s", need.ItemName.c_str(), FormatNumber(need.Quantity).c_str());
 					ImGui::SameLine();
-					ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "- %s", need.Detail.c_str());
+					const std::string achievement = need.AchievementName.empty() ? need.Detail : need.AchievementName;
+					ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "- %s", achievement.c_str());
 					ImGui::SameLine();
 					ImGui::TextDisabled("(not owned)");
 				}
@@ -1666,7 +1668,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.4 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.5 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "
@@ -1684,7 +1686,7 @@ namespace mc
 
 			ImGui::Spacing();
 			ImGui::TextUnformatted("Data sources");
-			ImGui::BulletText("ArenaNet Guild Wars 2 API: items, recipes, prices, account data");
+			ImGui::BulletText("ArenaNet Guild Wars 2 API: items, recipes, prices, achievements, account data");
 			ImGui::BulletText("gw2efficiency public recipe API: Mystic Forge, merchant and achievement sources");
 			ImGui::TextDisabled("Guild Wars 2 and all related assets are trademarks of ArenaNet, LLC. This addon is unofficial and not affiliated with ArenaNet.");
 

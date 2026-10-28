@@ -271,6 +271,37 @@ namespace mc
 		return result;
 	}
 
+	std::vector<AchievementInfo> ParseAchievements(const std::string& aJson)
+	{
+		std::vector<AchievementInfo> result;
+		try
+		{
+			const json parsed = json::parse(aJson);
+			if (!parsed.is_array())
+			{
+				return result;
+			}
+			for (const auto& object : parsed)
+			{
+				if (!object.is_object())
+				{
+					continue;
+				}
+				AchievementInfo achievement;
+				achievement.Id = GetInt(object, "id");
+				achievement.Name = GetString(object, "name");
+				if (achievement.Id != 0)
+				{
+					result.push_back(std::move(achievement));
+				}
+			}
+		}
+		catch (const std::exception&)
+		{
+		}
+		return result;
+	}
+
 	std::vector<int> ParseIntArray(const std::string& aJson)
 	{
 		std::vector<int> result;

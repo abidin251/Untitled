@@ -33,6 +33,7 @@ namespace mc
 		ItemDb Items;
 		PriceDb Prices;
 		CurrencyDb Currencies;
+		AchievementDb Achievements;
 		AccountData Account;
 		std::vector<CatalogEntry> Catalog;
 		std::shared_ptr<const Plan> CurrentPlan;
@@ -43,6 +44,7 @@ namespace mc
 		i64 ItemsFetchedAt = 0;
 		i64 PricesFetchedAt = 0;
 		i64 CurrenciesFetchedAt = 0;
+		i64 AchievementsFetchedAt = 0;
 		i64 CatalogFetchedAt = 0;
 
 		std::string Status = "Starting up...";
@@ -95,6 +97,9 @@ namespace mc
 		bool EnsureItems(const std::vector<int>& aIds, std::string& aError);
 		bool EnsurePrices(const std::vector<int>& aIds, std::string& aError);
 		bool EnsureCurrencies(std::string& aError);
+		bool EnsureAchievements(const std::vector<int>& aIds, std::string& aError);
+		// Fetches and applies the names of the achievements the plan warns about.
+		void ResolveAchievements(Plan& aPlan, std::string& aError);
 		void RebuildCatalogFromIds(const std::vector<int>& aIds);
 		void RebuildKnownOwnership();
 

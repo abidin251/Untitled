@@ -29,6 +29,11 @@ namespace mc
 	// feeds it gets a second block, and only when a dependency forces it.
 	std::vector<CraftStepGroup> BuildStepGroups(const Plan& aPlan);
 
+	// Fills in the name of every achievement the plan warns about, so the steps
+	// can show "Klobjarne Geirr: Raid or Convergence Victories" instead of its id.
+	// Unknown ids keep the id as their detail.
+	void ApplyAchievementNames(Plan& aPlan, const AchievementDb& aAchievements);
+
 	// Builds one plan per goal against a shared ownership pool, then merges the
 	// shopping lists and currency requirements into a single plan. Owned items
 	// are consumed in goal order so shared materials are never counted twice.
