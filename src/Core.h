@@ -34,6 +34,12 @@ namespace mc
 	// level, rarity and type are the guide.
 	int ResearchNoteYieldOverride(int aItemId);
 
+	// Items the acquisition graph does not label as achievements although they are
+	// earned rather than crafted or bought - the WvW Gift of Battle reward track is
+	// the one every legendary gift needs. Returns what awards the item, or null for
+	// everything else.
+	const char* AchievementItemDetail(int aItemId);
+
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
 	std::string Join(const std::vector<std::string>& aValues, const char* aSeparator);

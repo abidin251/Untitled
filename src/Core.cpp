@@ -107,6 +107,17 @@ namespace mc
 		}
 	}
 
+	const char* AchievementItemDetail(int aItemId)
+	{
+		switch (aItemId)
+		{
+		case 19678: // Gift of Battle, handed over by the WvW reward track of its name
+			return "Gift of Battle Reward Track";
+		default:
+			return nullptr;
+		}
+	}
+
 	std::string ToLower(std::string aValue)
 	{
 		std::transform(aValue.begin(), aValue.end(), aValue.begin(), [](unsigned char c) {

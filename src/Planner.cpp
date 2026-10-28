@@ -222,7 +222,8 @@ namespace mc
 		// lose the warning.
 		void AddAchievementNeed(PlanContext& aContext, const PlanNode& aNode, const RecipeNode& aRecipe)
 		{
-			const bool achievement = aRecipe.AchievementId != 0 || KindForRecipe(aRecipe) == SourceKind::Achievement;
+			const char* earned = AchievementItemDetail(aNode.Id);
+			const bool achievement = aRecipe.AchievementId != 0 || KindForRecipe(aRecipe) == SourceKind::Achievement || earned != nullptr;
 			if (!achievement || aNode.Remaining <= 0)
 			{
 				return;
@@ -236,7 +237,13 @@ namespace mc
 			need.AchievementId = aRecipe.AchievementId;
 			need.Detail = aRecipe.AchievementId != 0
 				? "Achievement #" + std::to_string(aRecipe.AchievementId)
-				: "Achievement";
+				: (earned != nullptr ? std::string(earned) : std::string("Achievement"));
+			// An earned item already knows what awards it, so the warning reads the
+			// same whether the graph carried a name or we supplied the detail.
+			if (earned != nullptr)
+			{
+				need.AchievementName = earned;
+			}
 			aContext.AchievementNeeds.push_back(std::move(need));
 		}
 
@@ -405,12 +412,13 @@ namespace mc
 				return node;
 			}
 
-			if (aNode.AchievementId != 0 || KindForRecipe(aNode) == SourceKind::Achievement)
+			const char* earned = AchievementItemDetail(aNode.Id);
+			if (aNode.AchievementId != 0 || KindForRecipe(aNode) == SourceKind::Achievement || earned != nullptr)
 			{
 				node.Source = SourceKind::Achievement;
 				node.SourceDetail = aNode.AchievementId != 0
 					? "Achievement #" + std::to_string(aNode.AchievementId)
-					: "Achievement";
+					: (earned != nullptr ? std::string(earned) : std::string("Achievement"));
 				// Nothing to buy, but the ingredient still belongs on the shopping list,
 				// and the steps warn about it before the station work begins.
 				AddShoppingRow(aContext, node, SourceKind::Achievement, 0, 0);

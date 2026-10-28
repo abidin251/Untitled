@@ -1081,6 +1081,56 @@ namespace
 		Check(plan.AchievementNeeds[0].Detail == "Achievement #8449", "the id is kept as the fallback");
 	}
 
+	// The Gift of Battle comes from a WvW reward track, which the acquisition graph
+	// does not label as an achievement, so the plan supplies what awards it.
+	void TestRewardTrackAchievementItem()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift of Mastery";
+		items[19678].Id = 19678;
+		items[19678].Name = "Gift of Battle";
+		items[1].Id = 1;
+		items[1].Name = "Obsidian Shard";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		// The graph hands it over as an item with nothing to craft or buy.
+		RecipeNode battle = ItemNode(19678, 2);
+		const RecipeNode root = Recipe(100, 1, 1, { battle }, "Mystic Forge");
+
+		PlanOptions options;
+		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, options, {});
+
+		Check(plan.AchievementNeeds.size() == 1, "a reward track item raises a warning");
+		if (!plan.AchievementNeeds.empty())
+		{
+			Check(plan.AchievementNeeds[0].ItemId == 19678, "the warning names the Gift of Battle");
+			Check(plan.AchievementNeeds[0].Quantity == 2, "the warning carries the amount still missing");
+			Check(plan.AchievementNeeds[0].Detail == "Gift of Battle Reward Track", "the warning says what awards it");
+			Check(plan.AchievementNeeds[0].AchievementName == "Gift of Battle Reward Track", "the warning shows that label instead of an id");
+		}
+
+		bool listed = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			if (entry.Id == 19678)
+			{
+				listed = true;
+				Check(entry.Source == SourceKind::Achievement && entry.TotalCost == 0, "the shopping line waits for the reward track");
+			}
+		}
+		Check(listed, "the Gift of Battle appears on the shopping list");
+		Check(plan.RemainingCost == 0, "an earned item adds no coin cost");
+
+		// Anything the plan cannot source at all is not turned into a warning.
+		const RecipeNode unknown = ItemNode(999, 1);
+		const Plan quiet = BuildPlan(Recipe(100, 1, 1, { unknown }, "Mystic Forge"), 1, items, prices, {}, {}, options, {});
+		Check(quiet.AchievementNeeds.empty(), "an unsourced item is not reported as an achievement");
+	}
+
 	// A merchant exchange paid in items puts what is handed over on the list; the
 	// item itself is not listed again, since its ingredients are already there.
 	void TestVendorExchangeWithListedIngredients()
@@ -1194,6 +1244,7 @@ int main()
 	TestVendorIngredients();
 	TestVendorExchangeWithListedIngredients();
 	TestAchievementWithComponents();
+	TestRewardTrackAchievementItem();
 	TestAchievementIngredients();
 	TestResearchNoteCost();
 	TestResearchNotesFromSourceRecipe();
