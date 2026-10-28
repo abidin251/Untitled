@@ -1,0 +1,111 @@
+name: Build and release
+
+# Pushing a version tag (1.9.3 or v1.9.3) tests, builds and publishes a release.
+# Running it by hand only builds and uploads the DLL as a workflow artifact.
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LLVM_MINGW_VERSION: "20240619"
+  LLVM_MINGW_ASSET: "llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+
+jobs:
+  build:
+    name: Test, build and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # The planner and the headless ImGui render run on Linux, so the release
+      # is only built when both suites pass.
+      - name: Run the planner and UI tests
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Isrc -Ideps -Ideps/imgui \
+            tests/test_plan.cpp src/Core.cpp src/Parse.cpp src/Planner.cpp \
+            -o mc_tests
+          ./mc_tests
+          g++ -std=c++17 -O2 -Itests/stub -Isrc -Ideps -Ideps/imgui \
+            tests/ui_smoke.cpp src/Ui.cpp src/Core.cpp src/Planner.cpp \
+            deps/imgui/imgui.cpp deps/imgui/imgui_draw.cpp \
+            deps/imgui/imgui_tables.cpp deps/imgui/imgui_widgets.cpp \
+            -o mc_ui_tests
+          ./mc_ui_tests
+
+      - name: Install LLVM-MinGW
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_ASSET}"
+          tar xf /tmp/llvm-mingw.tar.xz -C "$HOME"
+          echo "LLVM_MINGW_ROOT=$HOME/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-20.04-x86_64" >> "$GITHUB_ENV"
+
+      - name: Build MysticCrafting.dll
+        run: bash scripts/build-dll.sh
+
+      - name: Check what the DLL exports and loads
+        run: |
+          set -euo pipefail
+          DLL=build-win-release/MysticCrafting.dll
+          "$LLVM_MINGW_ROOT/bin/llvm-objdump" -p "$DLL" > objdump.txt
+          grep -q "GetAddonDef" objdump.txt \
+            || { echo "::error::GetAddonDef is not exported"; exit 1; }
+
+          UNEXPECTED="$(grep "DLL Name" objdump.txt | grep -viE "KERNEL32|USER32|WINHTTP|CRYPT32|api-ms-win-crt-" || true)"
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::The DLL depends on something other than the system libraries and the UCRT"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
+
+      - name: Check the embedded version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          EMBEDDED="$("$LLVM_MINGW_ROOT/bin/llvm-strings" build-win-release/MysticCrafting.dll \
+            | grep -oE "^Version [0-9]+\.[0-9]+\.[0-9]+" | head -1 | awk '{print $2}')"
+          echo "tag=$TAG embedded=$EMBEDDED"
+          if [ "$TAG" != "$EMBEDDED" ]; then
+            echo "::error::Tag $TAG does not match the embedded version $EMBEDDED. Bump GetAddonDef, the About tab and scripts/package.sh, or retag."
+            exit 1
+          fi
+
+      - name: Package the release
+        id: package
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$("$LLVM_MINGW_ROOT/bin/llvm-strings" build-win-release/MysticCrafting.dll \
+              | grep -oE "^Version [0-9]+\.[0-9]+\.[0-9]+" | head -1 | awk '{print $2}')-dev"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          VERSION="$VERSION" bash scripts/package.sh build-win-release/MysticCrafting.dll
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MysticCrafting-${{ env.VERSION }}
+          path: |
+            build-win-release/MysticCrafting.dll
+            dist/*.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.VERSION }}
+          generate_release_notes: true
+          files: |
+            build-win-release/MysticCrafting.dll
+            dist/MysticCrafting-${{ env.VERSION }}.zip

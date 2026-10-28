@@ -155,6 +155,12 @@ tests/
   test_plan.cpp    Planner/parser unit tests
   ui_smoke.cpp     Headless ImGui render test
   stub/Nexus.h     Minimal Nexus API stub for the UI test
+scripts/
+  build-dll.sh     Cross build of the DLL with LLVM-MinGW (no CMake)
+  build-cross.sh   The same build through CMake
+  package.sh       Packages the DLL and docs into dist/
+.github/workflows/
+  build-release.yml  Tests, builds the DLL and publishes the release
 ```
 
 ### How planning works
@@ -186,7 +192,8 @@ What has **not** been checked here: loading the DLL inside Guild Wars 2 with Nex
 
 - The addon signature is `0x4D435231`. Keep it stable. If you publish on [raidcore.gg](https://raidcore.gg/gw2/nexus), register that signature before release.
 - For automatic updates, set `Provider = UP_GitHub` and `UpdateLink` to the repository URL in `GetAddonDef`, then publish GitHub releases whose tags are `1.0.0` style and attach `MysticCrafting.dll`.
-- `scripts/package.sh` builds the DLL (if a cross toolchain is available) and creates a release folder and zip.
+- `scripts/build-dll.sh` builds the DLL with LLVM-MinGW (no CMake needed) and `scripts/package.sh` copies it with the docs into `dist/` and zips it.
+- CI lives in `.github/workflows/build-release.yml`. Pushing a tag such as `1.9.3` (or `v1.9.3`) runs both test suites, builds the DLL with a pinned LLVM-MinGW, checks that `GetAddonDef` is exported and that the only imports are the system DLLs and the UCRT, refuses the tag when it does not match the version embedded in the DLL, then publishes a GitHub release carrying `MysticCrafting.dll` and the packaged zip. Running the workflow by hand builds and uploads the DLL as an artifact without creating a release.
 
 ## Credits and licenses
 
