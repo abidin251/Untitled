@@ -199,6 +199,19 @@ namespace mc
 		bool IsLeaf() const { return Children.empty(); }
 	};
 
+	// An ingredient that only an achievement unlocks. The steps are work at a
+	// station, so these are listed before them: a plan cannot be started without
+	// knowing that part of it has to be unlocked first.
+	struct AchievementNeed
+	{
+		int ItemId = 0;
+		std::string ItemName;
+		std::string Icon;
+		int Quantity = 0;
+		int AchievementId = 0;
+		std::string Detail;   // "Achievement #2438"
+	};
+
 	struct Plan
 	{
 		int GoalId = 0;
@@ -215,6 +228,8 @@ namespace mc
 		std::map<int, i64> CurrencyOwned;
 		std::vector<PlanNode> GoalRoots;      // one tree per tracked goal in a combined plan
 		std::vector<PlanNode> NoteRoots;      // trees crafted to produce the research notes
+		// Achievement items the plan still needs, listed before the steps.
+		std::vector<AchievementNeed> AchievementNeeds;
 		i64 ResearchNotesRequired = 0;
 		i64 ResearchNotesNeeded = 0;
 		i64 ResearchNoteCost = 0;             // coin added for the missing research notes

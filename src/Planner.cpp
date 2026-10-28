@@ -32,6 +32,8 @@ namespace mc
 			std::map<int, i64> CurrencyNeeded;
 			int NodeCount = 0;
 			bool Truncated = false;
+			// Achievement items this walk needs, so the steps can warn first.
+			std::vector<AchievementNeed> AchievementNeeds;
 		};
 
 		i64 UnitPrice(const PlanContext& aContext, int aItemId)
@@ -350,6 +352,7 @@ namespace mc
 					aContext.CurrencyNeeded = std::move(scratch.CurrencyNeeded);
 					aContext.NodeCount = scratch.NodeCount;
 					aContext.Truncated = scratch.Truncated;
+					aContext.AchievementNeeds = std::move(scratch.AchievementNeeds);
 					node.Source = KindForRecipe(aNode);
 					node.Discipline = aNode.Disciplines.empty() ? "" : aNode.Disciplines.front();
 					node.SourceDetail = RecipeDetail(aNode, node.Source);
@@ -382,8 +385,20 @@ namespace mc
 				node.SourceDetail = aNode.AchievementId != 0
 					? "Achievement #" + std::to_string(aNode.AchievementId)
 					: "Achievement";
-				// Nothing to buy, but the ingredient still belongs on the shopping list.
+				// Nothing to buy, but the ingredient still belongs on the shopping list,
+				// and the steps warn about it before the station work begins.
 				AddShoppingRow(aContext, node, SourceKind::Achievement, 0, 0);
+				if (node.Remaining > 0)
+				{
+					AchievementNeed need;
+					need.ItemId = node.Id;
+					need.ItemName = node.Name;
+					need.Icon = node.Icon;
+					need.Quantity = node.Remaining;
+					need.AchievementId = aNode.AchievementId;
+					need.Detail = node.SourceDetail;
+					aContext.AchievementNeeds.push_back(std::move(need));
+				}
 			}
 			else if (!aNode.MerchantName.empty())
 			{
@@ -506,6 +521,27 @@ namespace mc
 					return aRow.Source == SourceKind::Vendor && covered.count(aRow.Id) > 0;
 				}),
 				aPlan.Shopping.end());
+		}
+
+		// The same achievement item needed twice is one warning carrying the total.
+		std::vector<AchievementNeed> AggregateAchievementNeeds(const std::vector<AchievementNeed>& aNeeds)
+		{
+			std::vector<AchievementNeed> result;
+			for (const auto& need : aNeeds)
+			{
+				auto found = std::find_if(result.begin(), result.end(), [&need](const AchievementNeed& aExisting) {
+					return aExisting.ItemId == need.ItemId;
+				});
+				if (found == result.end())
+				{
+					result.push_back(need);
+				}
+				else
+				{
+					found->Quantity += need.Quantity;
+				}
+			}
+			return result;
 		}
 
 		// The notes a source craft returns: a figure the community measured for the
@@ -729,6 +765,7 @@ namespace mc
 		plan.CurrencyNeeded = context.CurrencyNeeded;
 		plan.CurrencyOwned = aAccount.Currencies;
 		plan.NodeCount = context.NodeCount;
+		plan.AchievementNeeds = AggregateAchievementNeeds(context.AchievementNeeds);
 		plan.Complete = plan.Root.Complete;
 
 		// A second pass from scratch gives the denominator for progress and the
@@ -1361,6 +1398,7 @@ namespace mc
 		// left after the previous goals, so shared ingredients are not double-counted.
 		AccountData pool = aAccount;
 		std::vector<ShoppingItem> entries;
+		std::vector<AchievementNeed> achievementNeeds;
 		std::vector<std::string> names;
 
 		for (const auto& root : aRoots)
@@ -1382,6 +1420,7 @@ namespace mc
 			{
 				combined.NoteRoots.push_back(noteRoot);
 			}
+			achievementNeeds.insert(achievementNeeds.end(), plan.AchievementNeeds.begin(), plan.AchievementNeeds.end());
 			combined.GoalRoots.push_back(plan.Root);
 			entries.insert(entries.end(), plan.Shopping.begin(), plan.Shopping.end());
 			if (!plan.GoalName.empty())
@@ -1426,6 +1465,7 @@ namespace mc
 		}
 
 		combined.Shopping = AggregateShopping(entries);
+		combined.AchievementNeeds = AggregateAchievementNeeds(achievementNeeds);
 		DropRowsWithListedIngredients(combined);
 		combined.CurrencyOwned = aAccount.Currencies;
 		combined.Complete = combined.RemainingCost == 0;

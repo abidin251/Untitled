@@ -1170,6 +1170,16 @@ namespace mc
 			stream << "Mystic Crafting - " << aPlan.GoalName << " - crafting steps\r\n";
 			stream << "Work top to bottom. Everything to buy or gather is on the shopping list.\r\n\r\n";
 
+			if (!aPlan.AchievementNeeds.empty())
+			{
+				stream << "Before you start - unlock these first:\r\n";
+				for (const auto& need : aPlan.AchievementNeeds)
+				{
+					stream << "  " << need.Quantity << " x " << need.ItemName << " - " << need.Detail << " (not owned)\r\n";
+				}
+				stream << "\r\n";
+			}
+
 			int number = 1;
 			for (const auto& group : aGroups)
 			{
@@ -1266,6 +1276,32 @@ namespace mc
 			}
 			ImGui::SameLine();
 			ImGui::TextDisabled("Work top to bottom; each block is one place to go. Trading Post purchases are on the shopping list.");
+
+			// Achievement items are not station work, so they are called out before
+			// the visits: a plan cannot be finished without unlocking them first.
+			if (!plan->AchievementNeeds.empty())
+			{
+				ImGui::Spacing();
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.72f, 0.35f, 1.0f));
+				ImGui::TextUnformatted("Before you start: items that only an achievement unlocks");
+				ImGui::PopStyleColor();
+				const float height = std::min(28.0f + 20.0f * static_cast<float>(plan->AchievementNeeds.size()), 120.0f);
+				ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.24f, 0.19f, 0.08f, 0.85f));
+				ImGui::BeginChild("##mc_achievement_needs", ImVec2(0, height), true);
+				for (const auto& need : plan->AchievementNeeds)
+				{
+					DrawIcon(aApp, need.Icon, "item_" + std::to_string(need.ItemId), 16.0f);
+					ImGui::SameLine(0, 4.0f);
+					ImGui::Text("%s x%s", need.ItemName.c_str(), FormatNumber(need.Quantity).c_str());
+					ImGui::SameLine();
+					ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "- %s", need.Detail.c_str());
+					ImGui::SameLine();
+					ImGui::TextDisabled("(not owned)");
+				}
+				ImGui::EndChild();
+				ImGui::PopStyleColor();
+				ImGui::Spacing();
+			}
 
 			if (totalSteps == 0)
 			{
@@ -1630,7 +1666,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.2 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.3 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

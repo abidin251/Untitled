@@ -479,6 +479,41 @@ namespace
 			Check(entry.SourceDetail == "Achievement #2438", "the achievement id is kept for the shopping list");
 		}
 		Check(found, "achievement ingredients appear on the shopping list");
+
+		// The achievement items are warned about before the steps, with the very
+		// shortfall the plan still needs.
+		Check(plan.AchievementNeeds.size() == 1, "the plan reports the achievement item it needs");
+		if (!plan.AchievementNeeds.empty())
+		{
+			Check(plan.AchievementNeeds[0].ItemId == 204, "the warning names the item");
+			Check(plan.AchievementNeeds[0].Quantity == 3, "the warning carries the amount still missing");
+			Check(plan.AchievementNeeds[0].AchievementId == 2438, "the warning carries the achievement id");
+			Check(plan.AchievementNeeds[0].Detail == "Achievement #2438", "the warning is readable on its own");
+		}
+
+		// An owned achievement item is not a warning, and no steps claim it.
+		AccountData owned;
+		owned.Valid = true;
+		owned.Items[204] = 3;
+		const Plan ready = BuildPlan(Recipe(100, 1, 1, { trophy }, "Weaponsmith"), 1, items, {}, {}, owned, options, {});
+		Check(ready.AchievementNeeds.empty(), "an owned achievement item raises no warning");
+
+		// Two goals needing the same achievement item give one warning with the
+		// summed amount.
+		const std::vector<RecipeNode> roots = {
+			Recipe(100, 1, 1, { trophy }, "Weaponsmith"),
+			Recipe(101, 1, 1, { ItemNode(204, 2) }, "Artificer")
+		};
+		items[101].Id = 101;
+		items[101].Name = "Staff";
+		RecipeNode other = ItemNode(204, 2);
+		other.AchievementId = 2438;
+		const std::vector<RecipeNode> summed = {
+			Recipe(100, 1, 1, { trophy }, "Weaponsmith"),
+			Recipe(101, 1, 1, { other }, "Artificer")
+		};
+		const Plan combined = BuildCombinedPlan(summed, items, {}, {}, {}, options, {});
+		Check(combined.AchievementNeeds.size() == 1 && combined.AchievementNeeds[0].Quantity == 5, "a shared achievement item is one summed warning");
 	}
 
 	void TestResearchNoteCost()

@@ -276,6 +276,14 @@ namespace
 		plan->Shopping.push_back(noteIngredient);
 
 		plan->ResearchNotesRequired = 250;
+
+		mc::AchievementNeed need;
+		need.ItemId = 204;
+		need.ItemName = "Test Trophy";
+		need.Quantity = 1;
+		need.AchievementId = 2438;
+		need.Detail = "Achievement #2438";
+		plan->AchievementNeeds.push_back(need);
 		plan->ResearchNotesNeeded = 250;
 		plan->ResearchNoteCost = 50000;
 		plan->ResearchNoteSourceName = "Rabid Draconic Gauntlets";
