@@ -219,6 +219,21 @@ namespace mc
 		std::string AchievementName; // resolved through the API when it is known
 	};
 
+	// Work that can only be done a limited number of times per day or week. The
+	// plan says how many days the batch takes at that cap, so the steps do not
+	// pretend a time-gated craft can be finished in one sitting.
+	struct TimeGatedNeed
+	{
+		int ItemId = 0;
+		std::string ItemName;
+		std::string Icon;
+		int Quantity = 0;   // amount still to make
+		int Crafts = 0;     // crafts the amount needs
+		int PerDay = 0;     // crafts allowed per day, 0 when the cap is weekly
+		int PerWeek = 0;    // crafts allowed per week, 0 when the cap is daily
+		int Days = 0;       // days of crafting at that cap
+	};
+
 	struct AchievementInfo
 	{
 		int Id = 0;
@@ -245,6 +260,8 @@ namespace mc
 		std::vector<PlanNode> NoteRoots;      // trees crafted to produce the research notes
 		// Achievement items the plan still needs, listed before the steps.
 		std::vector<AchievementNeed> AchievementNeeds;
+		// Time-gated work the plan still needs, listed with the steps.
+		std::vector<TimeGatedNeed> TimeGatedNeeds;
 		i64 ResearchNotesRequired = 0;
 		i64 ResearchNotesNeeded = 0;
 		i64 ResearchNoteCost = 0;             // coin added for the missing research notes

@@ -632,8 +632,6 @@ namespace
 			if (entry.Id == kResearchNoteCurrency)
 			{
 				foundNotes = true;
-				Check(entry.UnitCost == 16 && entry.TotalCost == 4000, "the note line carries the per-note ingredient cost");
-				Check(entry.SourceDetail.find("Rabid Draconic Gauntlets") != std::string::npos, "the note line names the item it is crafted from");
 			}
 			if (entry.Id == 1)
 			{
@@ -642,7 +640,7 @@ namespace
 				Check(entry.ResearchNotes, "the source ingredients are marked as being for research notes");
 			}
 		}
-		Check(foundNotes, "the priced notes appear on the shopping list");
+		Check(!foundNotes, "the notes themselves are not listed while their ingredients are");
 		Check(foundIngredients, "the ingredients that produce the notes appear on the shopping list");
 
 		// The craft that turns into the notes is part of the work to do, flagged so
@@ -1191,6 +1189,119 @@ namespace
 		Check(foundCoinItem, "an item bought with coin stays on the shopping list");
 	}
 
+	// A material promotion trades cheap materials for a dearer one, so its bill is
+	// always weighed against the Trading Post: the cheaper route is the one the
+	// plan takes, even when the plan otherwise prefers to craft.
+	void TestMaterialPromotionVersusTradingPost()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Mithril Ore";
+		items[2].Id = 2;
+		items[2].Name = "Orichalcum Ore";
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 10;
+		prices[2].Id = 2;
+		prices[2].Sell = 900;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// 250 ore promote to ten, so a promoted ore costs 250 copper: cheaper
+		// than the 9 silver listing, so the promotion is what the plan does.
+		const RecipeNode promoted = Recipe(2, 20, 10, { ItemNode(1, 250) }, "Mystic Forge");
+		const Plan crafted = BuildPlan(Recipe(100, 1, 1, { promoted }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(crafted.Root.Children.size() == 1 && crafted.Root.Children[0].Source == SourceKind::MysticForge, "a promotion cheaper than the Trading Post is crafted");
+		Check(crafted.RemainingCost == 5000, "two promotion crafts of 250 ore cost 50 silver");
+
+		// The same promotion with a cheap enough listing is bought instead, even
+		// though the plan prefers to craft.
+		PriceDb cheapPrices = prices;
+		cheapPrices[2].Sell = 100;
+		const Plan bought = BuildPlan(Recipe(100, 1, 1, { promoted }, "Weaponsmith"), 1, items, cheapPrices, {}, {}, options, {});
+		Check(bought.Root.Children.size() == 1 && bought.Root.Children[0].Source == SourceKind::TradingPost, "a promotion dearer than the Trading Post is bought");
+		Check(bought.RemainingCost == 2000, "the cheaper listing is what the plan charges");
+	}
+
+	// The API marks account-bound items as not tradable, and the plan has to
+	// believe that rather than a price the cache may hold: 200 Mystic Runestones
+	// are 200 gold from Miyani, and no listing can undercut that.
+	void TestAccountBoundItemIgnoresTradingPostPrice()
+	{
+		ItemDb items;
+		items[79418].Id = 79418;
+		items[79418].Name = "Mystic Runestone";
+		items[79418].Tradable = false;
+		items[100].Id = 100;
+		items[100].Name = "Gift of Jade Mastery";
+
+		PriceDb prices;
+		prices[79418].Id = 79418;
+		prices[79418].Sell = 775;
+
+		const RecipeNode runestones = MerchantRecipe(79418, 200, 1, 10000, "Miyani / Mystic Forge Attendant", "Mystic Forge");
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { runestones }, "Mystic Forge"), 1, items, prices, {}, {}, {}, {});
+
+		Check(plan.Root.Children.size() == 1, "the runestones are part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			Check(plan.Root.Children[0].Source == SourceKind::Vendor, "an account-bound item is bought from its merchant, not the Trading Post");
+			Check(plan.Root.Children[0].TotalCost == 2000000, "200 runestones cost 200 gold from the merchant");
+		}
+		Check(plan.RemainingCost == 2000000, "the plan charges the merchant price and not the stale listing");
+	}
+
+	// Work that can only be done a few times a day or week is called out with the
+	// steps, since the batch cannot be finished in one sitting.
+	void TestTimeGatedItems()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Quartz Crystal";
+		items[2].Id = 2;
+		items[2].Name = "Charged Quartz Crystal";
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+
+		PriceDb prices;
+		prices[1].Id = 1;
+		prices[1].Sell = 100;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		RecipeNode daily = Recipe(2, 3, 1, { ItemNode(1, 1) }, "Artificer");
+		daily.DailyCap = 1;
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { daily }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(plan.TimeGatedNeeds.size() == 1, "a daily cap is reported with the plan");
+		if (plan.TimeGatedNeeds.size() == 1)
+		{
+			Check(plan.TimeGatedNeeds[0].ItemId == 2 && plan.TimeGatedNeeds[0].ItemName == "Charged Quartz Crystal", "the warning names the gated item");
+			Check(plan.TimeGatedNeeds[0].Quantity == 3 && plan.TimeGatedNeeds[0].Crafts == 3, "the warning carries the amount and the crafts");
+			Check(plan.TimeGatedNeeds[0].PerDay == 1 && plan.TimeGatedNeeds[0].Days == 3, "one a day needs three days");
+		}
+
+		// A weekly cap counts in days as well, so the two read alike.
+		RecipeNode weekly = Recipe(2, 2, 1, { ItemNode(1, 1) }, "Artificer");
+		weekly.WeeklyCap = 1;
+		const Plan weeklyPlan = BuildPlan(Recipe(100, 1, 1, { weekly }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(weeklyPlan.TimeGatedNeeds.size() == 1 && weeklyPlan.TimeGatedNeeds[0].Days == 14, "two weekly crafts need two weeks");
+
+		// A purchase with a cap is gated the same way.
+		RecipeNode limited = MerchantRecipe(2, 2, 1, 5000, "Miyani / Mystic Forge Attendant", "Mystic Forge");
+		limited.DailyCap = 1;
+		const Plan purchase = BuildPlan(Recipe(100, 1, 1, { limited }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(purchase.TimeGatedNeeds.size() == 1 && purchase.TimeGatedNeeds[0].PerDay == 1, "a capped purchase is gated too");
+
+		// Without a cap there is nothing to warn about.
+		const Plan free = BuildPlan(Recipe(100, 1, 1, { ItemNode(2, 1) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(free.TimeGatedNeeds.empty(), "an uncapped plan has no time-gated warning");
+	}
+
 	void TestParseItemsAndPrices()
 	{
 		const std::string itemsJson = R"([
@@ -1249,6 +1360,9 @@ int main()
 	TestResearchNoteCost();
 	TestResearchNotesFromSourceRecipe();
 	TestNoteYieldAndCheapestSource();
+	TestMaterialPromotionVersusTradingPost();
+	TestAccountBoundItemIgnoresTradingPostPrice();
+	TestTimeGatedItems();
 	TestStepGroups();
 	TestStepsFollowDependencies();
 	TestParseRecipeTree();

@@ -1181,6 +1181,19 @@ namespace mc
 				stream << "\r\n";
 			}
 
+			if (!aPlan.TimeGatedNeeds.empty())
+			{
+				stream << "Time gated - only so many can be made per day or week:\r\n";
+				for (const auto& need : aPlan.TimeGatedNeeds)
+				{
+					stream << "  " << need.Quantity << " x " << need.ItemName << " - " << need.Crafts << " craft"
+						<< (need.Crafts == 1 ? "" : "s") << " at "
+						<< (need.PerDay > 0 ? std::to_string(need.PerDay) + "/day" : std::to_string(need.PerWeek) + "/week")
+						<< " = " << need.Days << " day" << (need.Days == 1 ? "" : "s") << " of crafting\r\n";
+				}
+				stream << "\r\n";
+			}
+
 			int number = 1;
 			for (const auto& group : aGroups)
 			{
@@ -1299,6 +1312,35 @@ namespace mc
 					ImGui::TextColored(ImVec4(0.95f, 0.82f, 0.45f, 1.0f), "- %s", achievement.c_str());
 					ImGui::SameLine();
 					ImGui::TextDisabled("(not owned)");
+				}
+				ImGui::EndChild();
+				ImGui::PopStyleColor();
+				ImGui::Spacing();
+			}
+
+			// Time-gated work cannot be rushed, so it is called out next to the
+			// achievement warning: the plan cannot be finished in one sitting.
+			if (!plan->TimeGatedNeeds.empty())
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.60f, 0.80f, 0.95f, 1.0f));
+				ImGui::TextUnformatted("Time gated: only so many can be made per day or week");
+				ImGui::PopStyleColor();
+				const float height = std::min(28.0f + 20.0f * static_cast<float>(plan->TimeGatedNeeds.size()), 120.0f);
+				ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.18f, 0.26f, 0.85f));
+				ImGui::BeginChild("##mc_time_gated", ImVec2(0, height), true);
+				for (const auto& need : plan->TimeGatedNeeds)
+				{
+					const std::string cap = need.PerDay > 0
+						? std::to_string(need.PerDay) + "/day"
+						: std::to_string(need.PerWeek) + "/week";
+					DrawIcon(aApp, need.Icon, "item_" + std::to_string(need.ItemId), 16.0f);
+					ImGui::SameLine(0, 4.0f);
+					ImGui::Text("%s x%s", need.ItemName.c_str(), FormatNumber(need.Quantity).c_str());
+					ImGui::SameLine();
+					ImGui::TextColored(ImVec4(0.65f, 0.85f, 0.95f, 1.0f), "- %d craft%s at %s", need.Crafts,
+						need.Crafts == 1 ? "" : "s", cap.c_str());
+					ImGui::SameLine();
+					ImGui::TextDisabled("(%d day%s)", need.Days, need.Days == 1 ? "" : "s");
 				}
 				ImGui::EndChild();
 				ImGui::PopStyleColor();
@@ -1668,7 +1710,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.6 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.7 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

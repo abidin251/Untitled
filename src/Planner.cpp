@@ -34,6 +34,8 @@ namespace mc
 			bool Truncated = false;
 			// Achievement items this walk needs, so the steps can warn first.
 			std::vector<AchievementNeed> AchievementNeeds;
+			// Work the plan can only do a few times a day or week.
+			std::vector<TimeGatedNeed> TimeGatedNeeds;
 		};
 
 		i64 UnitPrice(const PlanContext& aContext, int aItemId)
@@ -44,6 +46,15 @@ namespace mc
 				return 0;
 			}
 			return aContext.Options.BuyOrderPrices ? it->second.Buy : it->second.Sell;
+		}
+
+		// An item the API marks as account bound can never be bought on the Trading
+		// Post, whatever the price cache happens to hold for it. Trusting such a
+		// price would turn a one-gold vendor item into a cheap purchase.
+		bool ItemIsTradable(const PlanContext& aContext, int aItemId)
+		{
+			auto it = aContext.Items.find(aItemId);
+			return it == aContext.Items.end() ? true : it->second.Tradable;
 		}
 
 		Preference GetPreference(const PlanContext& aContext, int aItemId)
@@ -247,6 +258,41 @@ namespace mc
 			aContext.AchievementNeeds.push_back(std::move(need));
 		}
 
+		// Work the plan can only do a limited number of times per day or week.
+		// A cap counts crafts rather than items, so a recipe that produces
+		// several at once is limited by how often it can be run.
+		void AddTimeGatedNeed(PlanContext& aContext, const PlanNode& aNode, const RecipeNode& aRecipe)
+		{
+			if (aNode.Remaining <= 0 || (aRecipe.DailyCap <= 0 && aRecipe.WeeklyCap <= 0))
+			{
+				return;
+			}
+			// A purchase the plan makes elsewhere in the same batch is not gated
+			// by the recipe it was skipped for.
+			if (aNode.Source == SourceKind::TradingPost)
+			{
+				return;
+			}
+
+			TimeGatedNeed need;
+			need.ItemId = aNode.Id;
+			need.ItemName = aNode.Name;
+			need.Icon = aNode.Icon;
+			need.Quantity = aNode.Remaining;
+			need.Crafts = std::max(1, aNode.Crafts > 0 ? aNode.Crafts : aNode.Remaining);
+			need.PerDay = std::max(0, aRecipe.DailyCap);
+			need.PerWeek = std::max(0, aRecipe.WeeklyCap);
+
+			const int perPeriod = need.PerDay > 0 ? need.PerDay : need.PerWeek;
+			if (perPeriod > 0)
+			{
+				const int periods = (need.Crafts + perPeriod - 1) / perPeriod;
+				need.Days = need.PerDay > 0 ? periods : periods * 7;
+			}
+
+			aContext.TimeGatedNeeds.push_back(std::move(need));
+		}
+
 		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
 		{
 			PlanNode node;
@@ -322,7 +368,7 @@ namespace mc
 			}
 
 			const i64 unitPrice = UnitPrice(aContext, aNode.Id);
-			node.Tradable = unitPrice > 0;
+			node.Tradable = unitPrice > 0 && ItemIsTradable(aContext, aNode.Id);
 
 			if (aNode.IsRecipe())
 			{
@@ -343,10 +389,11 @@ namespace mc
 				}
 
 				const bool vendorNode = KindForRecipe(aNode) == SourceKind::Vendor;
+				const bool promotion = KindForRecipe(aNode) == SourceKind::MysticForge;
 				const Preference preference = GetPreference(aContext, aNode.Id);
-				const i64 buyCost = unitPrice * node.Remaining;
+				const i64 buyCost = node.Tradable ? unitPrice * node.Remaining : 0;
 				bool buy = false;
-				if (unitPrice > 0)
+				if (node.Tradable)
 				{
 					if (preference == Preference::Buy)
 					{
@@ -356,10 +403,13 @@ namespace mc
 					{
 						// Buying from a merchant and buying from the Trading Post are both
 						// purchases, so the cheaper of the two is always used. Crafting
-						// still follows the user's preference.
+						// still follows the user's preference, except for a material
+						// promotion: it trades cheap materials for a dearer one, so the
+						// recipe is always weighed against the Trading Post and the
+						// cheaper route is the one listed.
 						buy = vendorNode
 							? buyCost <= craftCost
-							: (aContext.Options.PreferBuyingTradable && buyCost < craftCost);
+							: ((aContext.Options.PreferBuyingTradable || promotion) && buyCost < craftCost);
 					}
 				}
 
@@ -385,6 +435,7 @@ namespace mc
 					aContext.NodeCount = scratch.NodeCount;
 					aContext.Truncated = scratch.Truncated;
 					aContext.AchievementNeeds = std::move(scratch.AchievementNeeds);
+					aContext.TimeGatedNeeds = std::move(scratch.TimeGatedNeeds);
 					node.Source = KindForRecipe(aNode);
 					node.Discipline = aNode.Disciplines.empty() ? "" : aNode.Disciplines.front();
 					node.SourceDetail = RecipeDetail(aNode, node.Source);
@@ -397,11 +448,12 @@ namespace mc
 						AddVendorRow(aContext, node, aNode);
 					}
 					AddAchievementNeed(aContext, node, aNode);
+					AddTimeGatedNeed(aContext, node, aNode);
 				}
 				return node;
 			}
 
-			if (unitPrice > 0)
+			if (node.Tradable)
 			{
 				node.Source = SourceKind::TradingPost;
 				node.SourceDetail = "Buy from Trading Post";
@@ -434,6 +486,7 @@ namespace mc
 				}
 				node.MerchantDetail = MerchantLabel(aNode);
 				AddVendorRow(aContext, node, aNode);
+				AddTimeGatedNeed(aContext, node, aNode);
 			}
 			else
 			{
@@ -474,13 +527,11 @@ namespace mc
 				return a.Name < b.Name;
 			});
 			return result;
-		}
-
-		// A row is dropped when the plan obtains the item from ingredients the list
-		// already carries: a merchant exchange paid in items would otherwise put
-		// the item and what is handed over for it on the list at the same time. Only
-		// merchant lines are dropped, since a purchase of an item whose ingredients
-		// a different goal buys is still coin the player has to spend.
+		}			// A row is dropped when the plan obtains the item from ingredients the list
+			// already carries: a merchant exchange paid in items, or a refined material
+			// the plan makes from materials it buys anyway, would otherwise appear next
+			// to what it is made of. A purchase keeps its line, since buying the item
+			// means its ingredients are not on the list at all.
 		void DropRowsWithListedIngredients(Plan& aPlan)
 		{
 			if (aPlan.Shopping.empty())
@@ -538,13 +589,11 @@ namespace mc
 			if (covered.empty())
 			{
 				return;
-			}
-
-			aPlan.Shopping.erase(
-				std::remove_if(aPlan.Shopping.begin(), aPlan.Shopping.end(), [&covered](const ShoppingItem& aRow) {
-					return aRow.Source == SourceKind::Vendor && covered.count(aRow.Id) > 0;
-				}),
-				aPlan.Shopping.end());
+			}				aPlan.Shopping.erase(
+					std::remove_if(aPlan.Shopping.begin(), aPlan.Shopping.end(), [&covered](const ShoppingItem& aRow) {
+						return !aRow.Currency && covered.count(aRow.Id) > 0;
+					}),
+					aPlan.Shopping.end());
 		}
 
 		// The same achievement item needed twice is one warning carrying the total.
@@ -563,6 +612,33 @@ namespace mc
 				else
 				{
 					found->Quantity += need.Quantity;
+				}
+			}
+			return result;
+		}
+
+		// The same time-gated craft needed twice is one warning carrying the total.
+		std::vector<TimeGatedNeed> AggregateTimeGatedNeeds(const std::vector<TimeGatedNeed>& aNeeds)
+		{
+			std::vector<TimeGatedNeed> result;
+			for (const auto& need : aNeeds)
+			{
+				auto found = std::find_if(result.begin(), result.end(), [&need](const TimeGatedNeed& aExisting) {
+					return aExisting.ItemId == need.ItemId;
+				});
+				if (found == result.end())
+				{
+					result.push_back(need);
+					continue;
+				}
+
+				found->Quantity += need.Quantity;
+				found->Crafts += need.Crafts;
+				const int perPeriod = found->PerDay > 0 ? found->PerDay : found->PerWeek;
+				if (perPeriod > 0)
+				{
+					const int periods = (found->Crafts + perPeriod - 1) / perPeriod;
+					found->Days = found->PerDay > 0 ? periods : periods * 7;
 				}
 			}
 			return result;
@@ -699,31 +775,35 @@ namespace mc
 				aPlan.NoteRoots.push_back(bestPlan.Root);
 			}
 
-			ShoppingItem row;
-			row.Id = kResearchNoteCurrency;
-			row.Name = "Research Note";
-			row.Quantity = static_cast<int>(needed);
-			row.UnitCost = unitCost;
-			row.TotalCost = aPlan.ResearchNoteCost;
-			row.Source = SourceKind::Currency;
-			row.Currency = true;
-			row.ResearchNotes = true;
-			row.SourceDetail = priced
-				? "Crafted at a crafting station from " + sourceName + " (" + std::to_string(bestYield) + " notes per craft)"
-				: "Crafted at a crafting station and converted into research notes";
-			auto currency = aContext.Currencies.find(kResearchNoteCurrency);
-			if (currency != aContext.Currencies.end())
+			// When the notes could be priced, only the ingredients that produce them
+			// are listed: buying the notes is not a route the plan takes, so a note
+			// line would only repeat the cost of those ingredients.
+			if (!priced)
 			{
-				if (!currency->second.Name.empty())
+				ShoppingItem row;
+				row.Id = kResearchNoteCurrency;
+				row.Name = "Research Note";
+				row.Quantity = static_cast<int>(needed);
+				row.UnitCost = unitCost;
+				row.TotalCost = aPlan.ResearchNoteCost;
+				row.Source = SourceKind::Currency;
+				row.Currency = true;
+				row.ResearchNotes = true;
+				row.SourceDetail = "Crafted at a crafting station and converted into research notes";
+				auto currency = aContext.Currencies.find(kResearchNoteCurrency);
+				if (currency != aContext.Currencies.end())
 				{
-					row.Name = currency->second.Name;
+					if (!currency->second.Name.empty())
+					{
+						row.Name = currency->second.Name;
+					}
+					row.Icon = currency->second.Icon;
 				}
-				row.Icon = currency->second.Icon;
+				aPlan.Shopping.push_back(std::move(row));
 			}
 
-			// The notes first, then the ingredients that produce them; both are
-			// appended after the list is aggregated so they stay on their own lines.
-			aPlan.Shopping.push_back(std::move(row));
+			// The ingredients are appended after the list is aggregated so they stay
+			// on their own lines.
 			for (auto& ingredient : ingredients)
 			{
 				aPlan.Shopping.push_back(std::move(ingredient));
@@ -790,6 +870,7 @@ namespace mc
 		plan.CurrencyOwned = aAccount.Currencies;
 		plan.NodeCount = context.NodeCount;
 		plan.AchievementNeeds = AggregateAchievementNeeds(context.AchievementNeeds);
+		plan.TimeGatedNeeds = AggregateTimeGatedNeeds(context.TimeGatedNeeds);
 		plan.Complete = plan.Root.Complete;
 
 		// A second pass from scratch gives the denominator for progress and the
@@ -1439,6 +1520,7 @@ namespace mc
 		AccountData pool = aAccount;
 		std::vector<ShoppingItem> entries;
 		std::vector<AchievementNeed> achievementNeeds;
+		std::vector<TimeGatedNeed> timeGatedNeeds;
 		std::vector<std::string> names;
 
 		for (const auto& root : aRoots)
@@ -1461,6 +1543,7 @@ namespace mc
 				combined.NoteRoots.push_back(noteRoot);
 			}
 			achievementNeeds.insert(achievementNeeds.end(), plan.AchievementNeeds.begin(), plan.AchievementNeeds.end());
+			timeGatedNeeds.insert(timeGatedNeeds.end(), plan.TimeGatedNeeds.begin(), plan.TimeGatedNeeds.end());
 			combined.GoalRoots.push_back(plan.Root);
 			entries.insert(entries.end(), plan.Shopping.begin(), plan.Shopping.end());
 			if (!plan.GoalName.empty())
@@ -1506,6 +1589,7 @@ namespace mc
 
 		combined.Shopping = AggregateShopping(entries);
 		combined.AchievementNeeds = AggregateAchievementNeeds(achievementNeeds);
+		combined.TimeGatedNeeds = AggregateTimeGatedNeeds(timeGatedNeeds);
 		DropRowsWithListedIngredients(combined);
 		combined.CurrencyOwned = aAccount.Currencies;
 		combined.Complete = combined.RemainingCost == 0;
