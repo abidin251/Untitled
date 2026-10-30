@@ -528,6 +528,20 @@ namespace mc
 				&& KindForRecipe(aNode) == SourceKind::Vendor
 				&& aNode.MerchantCurrencyId == kGuildCommendationCurrency)
 			{
+				// With the commendations left out the merchant is no longer a way of
+				// getting the item, so when it can be bought on the Trading Post that
+				// is what the plan does, and it is charged like any other listing.
+				if (node.Tradable && unitPrice > 0 && GetPreference(aContext, aNode.Id) != Preference::Craft)
+				{
+					node.Source = SourceKind::TradingPost;
+					node.SourceDetail = "Buy from Trading Post - guild commendations excluded";
+					node.UnitCost = unitPrice;
+					node.TotalCost = unitPrice * node.Remaining;
+					node.Purchasable = true;
+					AddShoppingRow(aContext, node, SourceKind::TradingPost, unitPrice, node.TotalCost, true, true);
+					return node;
+				}
+
 				node.Source = SourceKind::Vendor;
 				node.MerchantDetail = MerchantLabel(aNode);
 				node.SourceDetail = node.MerchantDetail + " - guild commendations excluded";

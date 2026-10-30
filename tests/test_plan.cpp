@@ -1705,6 +1705,76 @@ namespace
 		Check(listed, "the excluded item is listed without being charged");
 	}
 
+	// With commendations excluded, an item the Trading Post sells is bought there
+	// and charged, rather than left as a free merchant line.
+	void TestGuildCommendationExclusionUsesTradingPost()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[24275].Id = 24275;
+		items[24275].Name = "Pile of Luminous Dust";
+
+		CurrencyDb currencies;
+		currencies[kGuildCommendationCurrency].Id = kGuildCommendationCurrency;
+		currencies[kGuildCommendationCurrency].Name = "Guild Commendation";
+
+		PriceDb prices;
+		prices[24275].Id = 24275;
+		prices[24275].Sell = 500;
+
+		const RecipeNode commendations = MerchantRecipe(24275, 3, kGuildCommendationCurrency, 1, "Guild Trader", "Guild Hall");
+		const RecipeNode root = Recipe(100, 1, 1, { commendations }, "Artificer");
+
+		PlanOptions options;
+		options.ExcludeGuildCommendations = true;
+		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(plan.Root.Children.size() == 1 && plan.Root.Children[0].Source == SourceKind::TradingPost, "an excluded commendation purchase is bought from the Trading Post");
+		Check(plan.RemainingCost == 1500, "the Trading Post purchase is charged");
+		Check(plan.CurrencyRequired.find(kGuildCommendationCurrency) == plan.CurrencyRequired.end(), "no commendations are asked for");
+		bool listed = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			listed = listed || (entry.Id == 24275 && entry.Source == SourceKind::TradingPost && entry.TotalCost == 1500);
+		}
+		Check(listed, "the item is on the shopping list as a Trading Post purchase");
+	}
+
+	// With commendations excluded, a tradable item that the merchant sold for them
+	// is bought from the Trading Post and appears on the shopping list, charged.
+	void TestExcludedCommendationItemUsesTradingPost()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[19721].Id = 19721;
+		items[19721].Name = "Chunk of Pure Jade";
+
+		PriceDb prices;
+		prices[19721].Id = 19721;
+		prices[19721].Sell = 500;
+
+		CurrencyDb currencies;
+		currencies[kGuildCommendationCurrency].Id = kGuildCommendationCurrency;
+		currencies[kGuildCommendationCurrency].Name = "Guild Commendation";
+
+		const RecipeNode merchant = MerchantRecipe(19721, 3, kGuildCommendationCurrency, 1, "Guild Trader", "Guild Hall");
+		const RecipeNode root = Recipe(100, 1, 1, { merchant }, "Artificer");
+
+		PlanOptions options;
+		options.ExcludeGuildCommendations = true;
+		const Plan plan = BuildPlan(root, 1, items, prices, currencies, {}, options, {});
+		Check(plan.Root.Children.size() == 1 && plan.Root.Children[0].Source == SourceKind::TradingPost, "an excluded commendation item is bought from the Trading Post");
+		Check(plan.RemainingCost == 1500, "the Trading Post purchase is charged");
+		Check(plan.CurrencyRequired.find(kGuildCommendationCurrency) == plan.CurrencyRequired.end(), "no commendations are asked for");
+		bool listed = false;
+		for (const auto& entry : plan.Shopping)
+		{
+			listed = listed || (entry.Id == 19721 && entry.Source == SourceKind::TradingPost && entry.TotalCost == 1500);
+		}
+		Check(listed, "the item is on the shopping list as a Trading Post purchase");
+	}
+
 	// Work that can only be done a few times a day or week is called out with the
 	// steps, since the batch cannot be finished in one sitting.
 	void TestTimeGatedItems()
@@ -1821,6 +1891,8 @@ int main()
 	TestPromotionVersusRecipe();
 	TestChoiceRecipePicksCheapestGemstone();
 	TestGuildCommendationExclusion();
+	TestExcludedCommendationItemUsesTradingPost();
+	TestGuildCommendationExclusionUsesTradingPost();
 	TestTimeGatedItems();
 	TestStepGroups();
 	TestStepsFollowDependencies();
