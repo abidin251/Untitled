@@ -390,6 +390,26 @@ namespace mc
 			return recipe;
 		}
 
+		// True when a plan node, or anything it is made from, has no way of being
+		// obtained: not owned, not priced, not bought and not crafted. A node that is
+		// already covered by stock, a currency, or a purchase that costs no coin is
+		// resolved even though its coin cost is zero.
+		bool HasUnresolvedMaterial(const PlanNode& aNode)
+		{
+			if (!aNode.IsCurrency && !aNode.Complete && aNode.Source == SourceKind::Unknown)
+			{
+				return true;
+			}
+			for (const auto& child : aNode.Children)
+			{
+				if (HasUnresolvedMaterial(child))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
 		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
 		{
 			PlanNode node;
@@ -558,21 +578,21 @@ namespace mc
 					candidateChildren.push_back(std::move(child));
 				}
 
-				// A promotion whose ingredients the item data does not price at all
-				// would come out free and the plan would charge nothing for the item,
-				// so it is only weighed when its bill is actually known.
-				const bool promotion = !entry.FromProvider;
-				if (promotion)
+				// A route made up from a table is only dropped when it is truly
+				// impossible: some material has no source at all, so the bill would
+				// leave it out and the item would come out looking cheaper than it
+				// is. A material that costs no coin (owned stock, a spirit shard
+				// purchase from the attendant, a vendor paid in another currency) is
+				// still a valid way of getting it, so a bill of zero is not a reason
+				// to throw the route away.
+				if (!entry.FromProvider)
 				{
-					// A combine whose ingredients are not priced at all comes out free,
-					// and so would the item it makes: the route is only trusted when
-					// every one of its materials is known.
-					bool unknown = false;
+					bool unresolved = false;
 					for (const auto& child : candidateChildren)
 					{
-						unknown = unknown || child.Source == SourceKind::Unknown;
+						unresolved = unresolved || HasUnresolvedMaterial(child);
 					}
-					if (unknown || candidateCost <= 0)
+					if (unresolved)
 					{
 						continue;
 					}

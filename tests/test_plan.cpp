@@ -1323,6 +1323,56 @@ namespace
 		Check(unpriced.Root.Children.size() == 1 && unpriced.Root.Children[0].Source != SourceKind::MysticForge, "an unpriced promotion is not taken for free");
 	}
 
+	// A promotion is only refused when a material has no source at all. One whose
+	// ingredients are covered by stock, or bought for spirit shards, still has a
+	// valid bill (possibly nothing in coin) and must stay a candidate.
+	void TestPromotionWithFreeIngredients()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[19701].Id = 19701;
+		items[19701].Name = "Orichalcum Ore";
+		items[19700].Id = 19700;
+		items[19700].Name = "Mithril Ore";
+		items[24277].Id = 24277;
+		items[24277].Name = "Pile of Crystalline Dust";
+		items[20796].Id = 20796;
+		items[20796].Name = "Philosopher's Stone";
+
+		PriceDb prices;
+		prices[19701].Id = 19701;
+		prices[19701].Sell = 10000;
+		prices[19700].Id = 19700;
+		prices[19700].Sell = 10;
+		prices[24277].Id = 24277;
+		prices[24277].Sell = 100;
+		prices[20796].Id = 20796;
+		prices[20796].Sell = 1000;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+		options.IncludeAccountItems = true;
+
+		// Everything the combine needs is already owned, so the promotion costs no
+		// coin. It is still a valid route and is taken over buying the ore.
+		AccountData owned;
+		owned.Items[19701] = 2;
+		owned.Items[19700] = 500;
+		owned.Items[24277] = 10;
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, items, prices, {}, owned, options, {});
+		Check(plan.Root.Children.size() == 1, "the ore is part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			Check(plan.Root.Children[0].Source == SourceKind::MysticForge, "a promotion paid for from stock is not rejected");
+		}
+
+		// Nothing owned: the stones are spirit shard purchases that cost no coin,
+		// yet the promotion still has a priced bill and is compared normally.
+		const Plan fresh = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(fresh.Root.Children.size() == 1 && fresh.Root.Children[0].Source == SourceKind::MysticForge, "a promotion with a spirit shard child is still compared");
+	}
+
 	// An item that has both a refinement recipe and a promotion is planned from
 	// whichever of the routes comes to less, not from the recipe alone.
 	void TestPromotionVersusRecipe()
@@ -1763,6 +1813,7 @@ int main()
 	TestMaterialPromotionVersusTradingPost();
 	TestAccountBoundItemIgnoresTradingPostPrice();
 	TestFineMaterialPromotionRoute();
+	TestPromotionWithFreeIngredients();
 	TestMerchantEntryWithoutName();
 	TestMerchantCoinPriceIgnoresWallet();
 	TestRareMaterialPromotion();
