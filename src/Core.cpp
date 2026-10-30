@@ -118,14 +118,15 @@ namespace mc
 		}
 	}
 
-	// The Mystic Forge promotions of fine and rare crafting materials. The
-	// acquisition provider has no entry for these, so a plan that needs orichalcum
-	// ore or powerful blood only ever saw the Trading Post listing; with the table
-	// here each of them is priced from what the Forge consumes and the cheaper
-	// route wins. The figures are the wiki's promotion tables (Philosopher's
-	// Stone/crafting materials), one combine each: the amount it returns, the
-	// cheaper material it is made from, the seed of the material itself, the dust
-	// of the tier, and the stones or crystals the combine burns.
+	// The Mystic Forge promotions of fine, rare and lodestone crafting materials.
+	// The acquisition provider has no entry for these, so a plan that needs
+	// orichalcum ore, powerful blood or a charged lodestone only ever saw the
+	// Trading Post listing; with the table here each of them is priced from what
+	// the Forge consumes and the cheaper route wins. The figures are the wiki's
+	// promotion tables (Philosopher's Stone/crafting materials, and the promotion
+	// recipe each lodestone and essence carries), one combine each: the amount it
+	// returns, the cheaper material it is made from, the seed of the material
+	// itself, the dust of the tier, and the stones or crystals the combine burns.
 	const std::vector<PromotionRecipe>& PromotionRecipes()
 	{
 		// result, output, lower id, lower count, seed id, seed count, dust id,
@@ -207,7 +208,15 @@ namespace mc
 			{ 24276, 40, 24275, 250, 24276, 1, 20799, 4, 20796, 4 },
 			{ 24275, 40, 24274, 250, 24275, 1, 20799, 3, 20796, 3 },
 			{ 24274, 40, 24273, 250, 24274, 1, 20799, 2, 20796, 2 },
-			{ 24273, 40, 24272, 250, 24273, 1, 20799, 1, 20796, 1 }
+			{ 24273, 40, 24272, 250, 24273, 1, 20799, 1, 20796, 1 },
+			// The tier-6 materials are promoted in the same fifty-of-the-tier-below
+			// combine as the rest of the family. Five of them had no row at all, so a
+			// plan could only buy them.
+			{ 24358, 5, 24341, 50, 24358, 1, 24277, 5, 20796, 5 },
+			{ 24289, 5, 24288, 50, 24289, 1, 24277, 5, 20796, 5 },
+			{ 24300, 5, 24299, 50, 24300, 1, 24277, 5, 20796, 5 },
+			{ 24283, 5, 24282, 50, 24283, 1, 24277, 5, 20796, 5 },
+			{ 24351, 6, 24350, 50, 24351, 1, 24277, 5, 20796, 5 }
 		};
 
 		static const std::vector<PromotionRecipe> recipes = []() {
@@ -225,22 +234,48 @@ namespace mc
 				result.push_back(std::move(recipe));
 			}
 
-			// The rare material promotions are a different combine from the fine ones
-			// in the table above: two of the tier below, a pile of the tier's dust, a
-			// bottle of Elonian Wine and a Mystic Crystal turn into one of the
-			// material itself, with no seed of the material consumed. The fifty-of-the-
-			// lower-tier recipe does not apply to them, and the acquisition graph has
-			// no promotion for them at all, so the Forge route was invisible.
-			static const int rareRows[][2] = {
-				{ 24295, 24294 }, // Vial of Powerful Blood from Vial of Potent Blood
-				{ 24357, 24356 }, // Vicious Fang from Large Fang
-				{ 24300, 24299 }, // Elaborate Totem from Intricate Totem
-				{ 24358, 24341 }, // Ancient Bone from Large Bone
-				{ 24289, 24288 }, // Armored Scale from Large Scale
-				{ 24351, 24350 }, // Vicious Claw from Large Claw
-				{ 24283, 24282 }  // Powerful Venom Sac from Potent Venom Sac
+			// The lodestones and essences are promoted by a different combine from the
+			// fine ones in the table above: two of the tier below, a pile of the tier's
+			// own dust, a bottle of Elonian Wine and a Mystic Crystal turn into one of
+			// the material itself, with no seed of the material consumed. None of them
+			// are in the acquisition graph at all - a Charged Lodestone or a Pile of
+			// Putrid Essence had no recipe anywhere in the plan - so every family is
+			// listed here, four tiers deep, from the sliver up to the lodestone.
+			// result, the tier below it, the dust of the result's tier.
+			static const int rareRows[][3] = {
+				{ 24302, 24301, 24274 }, // Charged Fragment from Charged Sliver
+				{ 24303, 24302, 24275 }, // Charged Shard from Charged Fragment
+				{ 24304, 24303, 24276 }, // Charged Core from Charged Shard
+				{ 24305, 24304, 24277 }, // Charged Lodestone from Charged Core
+				{ 24307, 24306, 24274 }, // Onyx Fragment from Onyx Sliver
+				{ 24308, 24307, 24275 }, // Onyx Shard from Onyx Fragment
+				{ 24309, 24308, 24276 }, // Onyx Core from Onyx Shard
+				{ 24310, 24309, 24277 }, // Onyx Lodestone from Onyx Core
+				{ 24312, 24311, 24274 }, // Molten Fragment from Molten Sliver
+				{ 24313, 24312, 24275 }, // Molten Shard from Molten Fragment
+				{ 24314, 24313, 24276 }, // Molten Core from Molten Shard
+				{ 24315, 24314, 24277 }, // Molten Lodestone from Molten Core
+				{ 24317, 24316, 24274 }, // Glacial Fragment from Glacial Sliver
+				{ 24318, 24317, 24275 }, // Glacial Shard from Glacial Fragment
+				{ 24319, 24318, 24276 }, // Glacial Core from Glacial Shard
+				{ 24320, 24319, 24277 }, // Glacial Lodestone from Glacial Core
+				{ 24322, 24321, 24274 }, // Destroyer Fragment from Destroyer Sliver
+				{ 24323, 24322, 24275 }, // Destroyer Shard from Destroyer Fragment
+				{ 24324, 24323, 24276 }, // Destroyer Core from Destroyer Shard
+				{ 24325, 24324, 24277 }, // Destroyer Lodestone from Destroyer Core
+				{ 24327, 24326, 24274 }, // Crystal Fragment from Crystal Sliver
+				{ 24328, 24327, 24275 }, // Crystal Shard from Crystal Fragment
+				{ 24329, 24328, 24276 }, // Crystal Core from Crystal Shard
+				{ 24330, 24329, 24277 }, // Crystal Lodestone from Crystal Core
+				{ 24332, 24331, 24274 }, // Pile of Foul Essence from Pile of Soiled Essence
+				{ 24333, 24332, 24275 }, // Pile of Filthy Essence from Pile of Foul Essence
+				{ 24334, 24333, 24276 }, // Pile of Vile Essence from Pile of Filthy Essence
+				{ 24335, 24334, 24277 }, // Pile of Putrid Essence from Pile of Vile Essence
+				{ 24337, 24336, 24274 }, // Corrupted Fragment from Corrupted Sliver
+				{ 24338, 24337, 24275 }, // Corrupted Shard from Corrupted Fragment
+				{ 24339, 24338, 24276 }, // Corrupted Core from Corrupted Shard
+				{ 24340, 24339, 24277 }  // Corrupted Lodestone from Corrupted Core
 			};
-			constexpr int kRareDust = 24277;    // Pile of Crystalline Dust
 			constexpr int kElonianWine = 19663; // Bottle of Elonian Wine
 			constexpr int kCrystal = 20799;     // Mystic Crystal
 			for (const auto& row : rareRows)
@@ -249,7 +284,7 @@ namespace mc
 				recipe.ItemId = row[0];
 				recipe.Output = 1;
 				recipe.Ingredients.push_back({ row[1], 2 });
-				recipe.Ingredients.push_back({ kRareDust, 1 });
+				recipe.Ingredients.push_back({ row[2], 1 });
 				recipe.Ingredients.push_back({ kElonianWine, 1 });
 				recipe.Ingredients.push_back({ kCrystal, 1 });
 				result.push_back(std::move(recipe));

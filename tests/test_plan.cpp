@@ -1462,20 +1462,20 @@ namespace
 			"the coin the wallet does not cover is still reported as the shortfall");
 	}
 
-	// The rare material promotions are their own combine, not the fine one: two of
-	// the tier below, a pile of the tier's dust, a bottle of Elonian Wine and a
-	// Mystic Crystal turn into one of the material, with no seed consumed. The
-	// table used to carry the fifty-of-the-lower-material fine recipe for a few of
-	// them and nothing at all for the rest, so the Forge route was wrong or absent.
+	// The lodestone and essence promotions are their own combine, not the fine one:
+	// two of the tier below, a pile of the tier's dust, a bottle of Elonian Wine and
+	// a Mystic Crystal turn into one of the material, with no seed consumed. The
+	// acquisition graph has no promotion for these families at all, so without a
+	// row here a Charged Lodestone could only ever be bought.
 	void TestRareMaterialPromotion()
 	{
 		ItemDb items;
 		items[100].Id = 100;
 		items[100].Name = "Gift";
-		items[24295].Id = 24295;
-		items[24295].Name = "Vial of Powerful Blood";
-		items[24294].Id = 24294;
-		items[24294].Name = "Vial of Potent Blood";
+		items[24305].Id = 24305;
+		items[24305].Name = "Charged Lodestone";
+		items[24304].Id = 24304;
+		items[24304].Name = "Charged Core";
 		items[24277].Id = 24277;
 		items[24277].Name = "Pile of Crystalline Dust";
 		items[19663].Id = 19663;
@@ -1484,10 +1484,10 @@ namespace
 		items[20799].Name = "Mystic Crystal";
 
 		PriceDb prices;
-		prices[24295].Id = 24295;
-		prices[24295].Sell = 2000;
-		prices[24294].Id = 24294;
-		prices[24294].Sell = 200;
+		prices[24305].Id = 24305;
+		prices[24305].Sell = 2000;
+		prices[24304].Id = 24304;
+		prices[24304].Sell = 200;
 		prices[24277].Id = 24277;
 		prices[24277].Sell = 800;
 		prices[19663].Id = 19663;
@@ -1496,24 +1496,67 @@ namespace
 		PlanOptions options;
 		options.PreferBuyingTradable = false;
 
-		// Four bloods are four combines: eight potent bloods, four dusts and four
-		// wines come to 6800, cheaper than the 8000 listing, so the Forge is the
-		// route. The crystal is bought from the attendant with spirit shards and
-		// costs no coin.
-		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(24295, 4) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
-		Check(plan.Root.Children.size() == 1, "the blood is part of the plan");
+		// Four lodestones are four combines: eight cores, four dusts and four wines
+		// come to 6800, cheaper than the 8000 listing, so the Forge is the route. The
+		// crystal is bought from the attendant with spirit shards and costs no coin.
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(24305, 4) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(plan.Root.Children.size() == 1, "the lodestone is part of the plan");
 		if (plan.Root.Children.size() == 1)
 		{
-			const PlanNode& blood = plan.Root.Children[0];
-			Check(blood.Source == SourceKind::MysticForge, "the rare promotion is the route when it beats the listing");
-			Check(blood.Crafts == 4 && blood.TotalCost == 6800, "the rare promotion is charged for two lower materials, a dust and a wine");
+			const PlanNode& lodestone = plan.Root.Children[0];
+			Check(lodestone.Source == SourceKind::MysticForge, "the promotion is the route when it beats the listing");
+			Check(lodestone.Crafts == 4 && lodestone.TotalCost == 6800, "the promotion is charged for two cores, a dust and a wine");
 		}
 
-		// With a cheap enough listing the blood is bought, as any promotion is.
+		// With a cheap enough listing the lodestone is bought, as any promotion is.
 		PriceDb cheap = prices;
-		cheap[24295].Sell = 100;
-		const Plan bought = BuildPlan(Recipe(100, 1, 1, { ItemNode(24295, 4) }, "Weaponsmith"), 1, items, cheap, {}, {}, options, {});
-		Check(bought.Root.Children.size() == 1 && bought.Root.Children[0].Source == SourceKind::TradingPost, "a rare promotion dearer than the listing is not used");
+		cheap[24305].Sell = 100;
+		const Plan bought = BuildPlan(Recipe(100, 1, 1, { ItemNode(24305, 4) }, "Weaponsmith"), 1, items, cheap, {}, {}, options, {});
+		Check(bought.Root.Children.size() == 1 && bought.Root.Children[0].Source == SourceKind::TradingPost, "a promotion dearer than the listing is not used");
+	}
+
+	// Every material the Forge promotes has to be in the table, or the plan falls
+	// back to buying it: the five tier-6 materials that had no fine row, and all
+	// four tiers of the eight lodestone and essence families.
+	void TestPromotionTableCoversEveryMaterial()
+	{
+		const int lodestones[] = {
+			24302, 24303, 24304, 24305, // Charged
+			24307, 24308, 24309, 24310, // Onyx
+			24312, 24313, 24314, 24315, // Molten
+			24317, 24318, 24319, 24320, // Glacial
+			24322, 24323, 24324, 24325, // Destroyer
+			24327, 24328, 24329, 24330, // Crystal
+			24332, 24333, 24334, 24335, // Soiled essence to putrid essence
+			24337, 24338, 24339, 24340  // Corrupted
+		};
+		for (int id : lodestones)
+		{
+			const PromotionRecipe* promotion = FindPromotion(id);
+			Check(promotion != nullptr, "every lodestone and essence tier has a promotion");
+			if (promotion)
+			{
+				Check(promotion->Output == 1 && promotion->Ingredients.size() == 4
+					&& promotion->Ingredients[0].Count == 2,
+					"a lodestone promotion is two of the tier below, a dust, a wine and a crystal");
+			}
+		}
+
+		// The tier-6 materials are promoted fifty of the tier below at a time.
+		const int tierSix[] = { 24295, 24357, 24300, 24358, 24289, 24351, 24283 };
+		for (int id : tierSix)
+		{
+			const PromotionRecipe* promotion = FindPromotion(id);
+			Check(promotion != nullptr && promotion->Ingredients[0].Count == 50 && promotion->Output > 1,
+				"every tier-6 material has its fifty-of-the-tier-below promotion");
+		}
+
+		// A fine material of the tighest tier still has its dust and its stones.
+		const PromotionRecipe* bone = FindPromotion(24358);
+		Check(bone != nullptr && bone->Output == 5 && bone->Ingredients.size() == 4
+			&& bone->Ingredients[0].ItemId == 24341 && bone->Ingredients[1].ItemId == 24358
+			&& bone->Ingredients[2].ItemId == 24277 && bone->Ingredients[3].ItemId == 20796,
+			"Ancient Bone is fifty Large Bones, a seed, five dusts and five stones");
 	}
 
 	// Amalgamated Gemstone has one recipe per gemstone it can be made from, and the
@@ -1723,6 +1766,7 @@ int main()
 	TestMerchantEntryWithoutName();
 	TestMerchantCoinPriceIgnoresWallet();
 	TestRareMaterialPromotion();
+	TestPromotionTableCoversEveryMaterial();
 	TestPromotionVersusRecipe();
 	TestChoiceRecipePicksCheapestGemstone();
 	TestGuildCommendationExclusion();

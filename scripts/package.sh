@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-1.9.12}"
+VERSION="${VERSION:-1.9.13}"
 
 # The DLL to ship: the path given as the first argument, otherwise the newest
 # one any of the build scripts produced. A fixed path here once shipped an

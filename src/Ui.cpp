@@ -1964,7 +1964,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.12 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.13 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "
