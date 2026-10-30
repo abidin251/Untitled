@@ -1373,6 +1373,63 @@ namespace
 		Check(crafted.Root.Children.size() == 1 && crafted.Root.Children[0].Source == SourceKind::Craft, "a promotion dearer than the recipe is not used");
 	}
 
+	// Amalgamated Gemstone has one recipe per gemstone it can be made from, and the
+	// graph only sends one of them. The plan has to try the whole family (and the
+	// bulk combine that makes ten at a time) instead of believing the variant it
+	// was handed, which is how a gemstone the Forge makes for less was bought.
+	void TestChoiceRecipePicksCheapestGemstone()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[68063].Id = 68063;
+		items[68063].Name = "Amalgamated Gemstone";
+		items[24277].Id = 24277;
+		items[24277].Name = "Pile of Crystalline Dust";
+		items[24532].Id = 24532;
+		items[24532].Name = "Crest of the Rabid";
+		items[24508].Id = 24508;
+		items[24508].Name = "Ruby Orb";
+
+		PriceDb prices;
+		prices[68063].Id = 68063;
+		prices[68063].Sell = 10799;
+		prices[24277].Id = 24277;
+		prices[24277].Sell = 881;
+		prices[24532].Id = 24532;
+		prices[24532].Sell = 1276;
+		prices[24508].Id = 24508;
+		prices[24508].Sell = 500;
+
+		// What the provider sends: nine of the dearest crest and a dust, which is
+		// dearer than the listing, so nothing would be crafted from it alone.
+		const RecipeNode given = Recipe(68063, 10, 1, { ItemNode(24277, 1), ItemNode(24532, 9) }, "Mystic Forge");
+		const RecipeNode root = Recipe(100, 1, 1, { given }, "Weaponsmith");
+
+		const Plan plan = BuildPlan(root, 1, items, prices, {}, {}, PlanOptions{}, {});
+		Check(plan.Root.Children.size() == 1, "the gemstones are part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			const PlanNode& gemstones = plan.Root.Children[0];
+			Check(gemstones.Source == SourceKind::MysticForge, "the gemstone is forged when a cheaper gemstone makes the combine cheaper than the listing");
+			// The bulk combine makes ten from 75 rubies and a dust: 38,381 copper
+			// against 107,990 for the listing and 123,650 for the crest variant.
+			Check(gemstones.TotalCost == 38381, "the cheapest gemstone family and the bulk combine are the route charged");
+			bool rubyUsed = false;
+			for (const auto& child : gemstones.Children)
+			{
+				rubyUsed = rubyUsed || child.Id == 24508;
+			}
+			Check(rubyUsed, "the shopping list carries the gemstone the plan actually forges from");
+			bool gemstonesListed = false;
+			for (const auto& entry : plan.Shopping)
+			{
+				gemstonesListed = gemstonesListed || entry.Id == 24508;
+			}
+			Check(gemstonesListed, "the chosen gemstone appears on the shopping list");
+		}
+	}
+
 	// Guild commendations are a currency the plan can be told to leave out: the
 	// purchase still needs the item, but it is not charged and the wallet does not
 	// ask for the commendations.
@@ -1521,6 +1578,7 @@ int main()
 	TestAccountBoundItemIgnoresTradingPostPrice();
 	TestFineMaterialPromotionRoute();
 	TestPromotionVersusRecipe();
+	TestChoiceRecipePicksCheapestGemstone();
 	TestGuildCommendationExclusion();
 	TestTimeGatedItems();
 	TestStepGroups();

@@ -65,6 +65,26 @@ namespace mc
 	// The promotion for this item, or null when the Forge has no such recipe.
 	const PromotionRecipe* FindPromotion(int aItemId);
 
+	// A Mystic Forge recipe whose main material can be any one of a family of
+	// interchangeable items. The acquisition graph only ever carries one of those
+	// variants (the Amalgamated Gemstone combine has fifty, one per crest, orb and
+	// doubloon), so the planner builds a route for every choice and plans the
+	// cheapest - the same combine with a different gemstone in it.
+	struct ChoiceRecipe
+	{
+		int ItemId = 0;       // what the combine makes
+		int Output = 1;       // how many one combine returns
+		int ChoiceCount = 0;  // how many of the chosen item it consumes
+		int DustItemId = 0;   // the fixed second ingredient
+		int DustCount = 0;
+		std::vector<int> Choices; // interchangeable items, any one of them works
+	};
+
+	const std::vector<ChoiceRecipe>& ChoiceRecipes();
+
+	// Every choice recipe that makes this item, one entry per fixed shape.
+	std::vector<const ChoiceRecipe*> FindChoiceRecipes(int aItemId);
+
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
 	std::string Join(const std::vector<std::string>& aValues, const char* aSeparator);

@@ -433,6 +433,53 @@ namespace mc
 			return true;
 		}
 
+		// Right-aligns a value inside a table cell, so the figures line up under
+		// their header instead of trailing off to the left of a wide column.
+		void TextRight(const std::string& aText, const ImVec4* aColor = nullptr)
+		{
+			// The cell's own right padding is left alone, and the window edge is a hard
+			// limit, or the last digit would sit on the border and read as clipped.
+			const float padding = ImGui::GetStyle().CellPadding.x;
+			const float available = ImGui::GetContentRegionAvail().x - padding;
+			const float width = ImGui::CalcTextSize(aText.c_str()).x;
+			const float start = ImGui::GetCursorPosX();
+			const float limit = ImGui::GetWindowContentRegionMax().x - padding - width;
+			const float target = std::min(start + available - width, limit);
+			if (target > start)
+			{
+				ImGui::SetCursorPosX(target);
+			}
+			if (aColor != nullptr)
+			{
+				ImGui::TextColored(*aColor, "%s", aText.c_str());
+			}
+			else
+			{
+				ImGui::TextUnformatted(aText.c_str());
+			}
+		}
+
+		// A small label over its figure. The summary strips read as a dashboard
+		// rather than as one long sentence with numbers buried in it.
+		void Stat(const char* aLabel, const std::string& aValue, const ImVec4& aColor)
+		{
+			ImGui::BeginGroup();
+			ImGui::TextColored(ImVec4(0.52f, 0.56f, 0.62f, 1.0f), "%s", aLabel);
+			ImGui::TextColored(aColor, "%s", aValue.c_str());
+			ImGui::EndGroup();
+		}
+
+		void StatSeparator(float aSpacing = 18.0f)
+		{
+			ImGui::SameLine(0, aSpacing);
+			ImGui::TextDisabled("|");
+			ImGui::SameLine(0, aSpacing);
+		}
+
+		const ImVec4 kFocusColor(0.96f, 0.79f, 0.42f, 1.0f);
+		const ImVec4 kPlainColor(0.82f, 0.84f, 0.88f, 1.0f);
+		const ImVec4 kGoodColor(0.50f, 0.88f, 0.55f, 1.0f);
+
 		void DrawCatalog(App& aApp, const UiSnapshot& aSnapshot)
 		{
 			static char searchBuffer[128] = {};
@@ -443,11 +490,18 @@ namespace mc
 				lastSearch = aApp.Search;
 			}
 
-			ImGui::SetNextItemWidth(-1.0f);
+			ImGui::SetNextItemWidth(-46.0f);
 			if (ImGui::InputTextWithHint("##mc_search", "Search legendaries...", searchBuffer, sizeof(searchBuffer)))
 			{
 				aApp.Search = ToLower(Trim(searchBuffer));
 				lastSearch = aApp.Search;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Clear", ImVec2(42.0f, 0)))
+			{
+				searchBuffer[0] = '\0';
+				aApp.Search.clear();
+				lastSearch.clear();
 			}
 
 			std::set<std::string> typeSet;
@@ -561,11 +615,17 @@ namespace mc
 			const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
 				ImGuiTableFlags_Resizable | ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingStretchProp;
 
+			// What the filters left, so a narrow search is visibly narrow instead of
+			// looking like the catalog lost entries.
+			ImGui::TextDisabled("%d of %d legendaries", static_cast<int>(rows.size()), static_cast<int>(aSnapshot.Catalog.size()));
+			ImGui::SameLine();
+			ImGui::TextDisabled("| click a row to plan it");
+
 			if (ImGui::BeginTable("##mc_catalog", 3, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
 			{
 				ImGui::TableSetupColumn("Legendary", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort, 0, 0);
-				ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 100.0f, 1);
-				ImGui::TableSetupColumn("Cost", ImGuiTableColumnFlags_WidthFixed, 95.0f, 2);
+				ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 96.0f, 1);
+				ImGui::TableSetupColumn("Cost", ImGuiTableColumnFlags_WidthFixed, 100.0f, 2);
 				ImGui::TableSetupScrollFreeze(0, 1);
 				ImGui::TableHeadersRow();
 
@@ -634,11 +694,11 @@ namespace mc
 					auto cost = aSnapshot.Costs.find(entry->Id);
 					if (cost != aSnapshot.Costs.end())
 					{
-						ImGui::Text("%s", FormatCoins(cost->second).c_str());
+						TextRight(FormatCoins(cost->second));
 					}
 					else
 					{
-						ImGui::TextDisabled("-");
+						TextRight("-");
 					}
 
 					if (hovered && !ImGui::IsPopupOpen("##rowctx"))
@@ -729,27 +789,30 @@ namespace mc
 				ShowItemTooltip(aApp, aNode.Id, aNode.IsCurrency);
 			}
 
+			const ImVec4 missingColor(0.95f, 0.75f, 0.35f, 1.0f);
+			const ImVec4 ownedColor(0.50f, 0.88f, 0.55f, 1.0f);
+
 			ImGui::TableSetColumnIndex(1);
-			ImGui::Text("%d", aNode.Required);
+			TextRight(std::to_string(aNode.Required));
 
 			ImGui::TableSetColumnIndex(2);
 			if (aNode.Owned > 0)
 			{
-				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "%d", aNode.Owned);
+				TextRight(std::to_string(aNode.Owned), &ownedColor);
 			}
 			else
 			{
-				ImGui::TextDisabled("0");
+				TextRight("0");
 			}
 
 			ImGui::TableSetColumnIndex(3);
 			if (aNode.Remaining > 0)
 			{
-				ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.0f), "%d", aNode.Remaining);
+				TextRight(std::to_string(aNode.Remaining), &missingColor);
 			}
 			else
 			{
-				ImGui::TextDisabled("-");
+				TextRight("-");
 			}
 
 			ImGui::TableSetColumnIndex(4);
@@ -762,11 +825,11 @@ namespace mc
 			ImGui::TableSetColumnIndex(5);
 			if (aNode.TotalCost > 0)
 			{
-				ImGui::Text("%s", FormatCoins(aNode.TotalCost).c_str());
+				TextRight(FormatCoins(aNode.TotalCost));
 			}
 			else
 			{
-				ImGui::TextDisabled("-");
+				TextRight("-");
 			}
 
 			if (hovered)
@@ -814,14 +877,23 @@ namespace mc
 
 			ImGui::PushID(plan->GoalId);
 			DrawIcon(aApp, plan->GoalIcon, "item_" + std::to_string(plan->GoalId), 42.0f);
-			ImGui::SameLine();
+			ImGui::SameLine(0, 8.0f);
 			ImGui::BeginGroup();
 			ImGui::TextColored(RarityColor(plan->GoalRarity), "%s", plan->GoalName.c_str());
-			ImGui::TextDisabled("%s", plan->GoalType.c_str());
+			if (plan->GoalRarity.empty())
+			{
+				ImGui::TextDisabled("%s", plan->GoalType.c_str());
+			}
+			else
+			{
+				ImGui::TextDisabled("%s - %s", plan->GoalType.c_str(), plan->GoalRarity.c_str());
+			}
 			ImGui::EndGroup();
 
-			ImGui::SameLine();
+			// The actions sit on the right edge, so the goal keeps the full width of
+			// the pane and the figures below have room to line up.
 			const bool tracked = IsTracked(aApp, plan->GoalId);
+			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 232.0f);
 			if (ImGui::Button(tracked ? "Untrack" : "Track"))
 			{
 				SetTracked(aApp, plan->GoalId, !tracked);
@@ -839,19 +911,30 @@ namespace mc
 				aApp.Notify("Shopping list copied to the clipboard.");
 			}
 
-			char progressText[128];
-			std::snprintf(progressText, sizeof(progressText), "%.0f%% - %s remaining", plan->Progress() * 100.0f, FormatCoins(plan->RemainingCost).c_str());
-			ImGui::ProgressBar(plan->Progress(), ImVec2(-1, 0), progressText);
+			ImGui::Spacing();
+			char progressText[64];
+			std::snprintf(progressText, sizeof(progressText), "%s", plan->Complete ? "Already owned" : "");
+			if (!plan->Complete)
+			{
+				std::snprintf(progressText, sizeof(progressText), "%.0f%% covered", plan->Progress() * 100.0f);
+			}
+			ImGui::ProgressBar(plan->Progress(), ImVec2(-1, 22.0f), progressText);
 
-			ImGui::Text("Remaining: %s", FormatCoins(plan->RemainingCost).c_str());
-			ImGui::SameLine();
-			ImGui::TextDisabled("| From scratch: %s", FormatCoins(plan->FullCost).c_str());
-			ImGui::SameLine();
-			ImGui::TextDisabled("| Nodes: %d", plan->NodeCount);
+			ImGui::Spacing();
+			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			StatSeparator();
+			Stat("From scratch", FormatCoins(plan->FullCost), kPlainColor);
+			StatSeparator();
+			Stat("Nodes", std::to_string(plan->NodeCount), kPlainColor);
 			if (plan->Complete)
 			{
-				ImGui::SameLine();
-				ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "| Already owned");
+				StatSeparator();
+				Stat("Status", "Already owned", kGoodColor);
+			}
+			else if (plan->Progress() >= 1.0f)
+			{
+				StatSeparator();
+				Stat("Status", "Everything gathered", kGoodColor);
 			}
 
 			ImGui::Spacing();
@@ -866,7 +949,19 @@ namespace mc
 				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 120.0f);
 				ImGui::TableSetupColumn("Cost", ImGuiTableColumnFlags_WidthFixed, 95.0f);
 				ImGui::TableSetupScrollFreeze(0, 1);
-				ImGui::TableHeadersRow();
+				ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TableHeader("Item");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TableHeader("Need");
+				ImGui::TableSetColumnIndex(2);
+				ImGui::TableHeader("Owned");
+				ImGui::TableSetColumnIndex(3);
+				ImGui::TableHeader("Missing");
+				ImGui::TableSetColumnIndex(4);
+				ImGui::TableHeader("Source");
+				ImGui::TableSetColumnIndex(5);
+				ImGui::TableHeader("Cost");
 
 				std::vector<std::pair<int, int>> preferenceUpdates;
 				DrawPlanNode(aApp, aSnapshot, plan->Root, preferenceUpdates);
@@ -926,18 +1021,43 @@ namespace mc
 
 			if (plan->GoalCount > 1)
 			{
-				ImGui::Text("Shopping list for %d tracked plans", plan->GoalCount);
+				ImGui::TextColored(kPlainColor, "Shopping list for %d tracked plans", plan->GoalCount);
 			}
 			else
 			{
-				ImGui::Text("Shopping list for %s", plan->GoalName.c_str());
+				ImGui::TextColored(kPlainColor, "Shopping list for %s", plan->GoalName.c_str());
 			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("(%s remaining)", FormatCoins(plan->RemainingCost).c_str());
+			int tradingPostLines = 0;
+			int merchantLines = 0;
+			int otherLines = 0;
+			i64 tradingPostTotal = 0;
+			for (const auto& entry : plan->Shopping)
+			{
+				if (entry.Source == SourceKind::TradingPost)
+				{
+					++tradingPostLines;
+					tradingPostTotal += entry.TotalCost;
+				}
+				else if (entry.Source == SourceKind::Vendor)
+				{
+					++merchantLines;
+				}
+				else
+				{
+					++otherLines;
+				}
+			}
+
+			ImGui::Spacing();
+			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			StatSeparator();
+			Stat("Trading Post", FormatCoins(tradingPostTotal) + "  (" + std::to_string(tradingPostLines) + ")", kPlainColor);
+			StatSeparator();
+			Stat("Merchants and other", FormatCoins(std::max<i64>(0, plan->RemainingCost - tradingPostTotal)) + "  (" + std::to_string(merchantLines + otherLines) + ")", kPlainColor);
 			if (plan->GoalCount > 1)
 			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("| %s from scratch", FormatCoins(plan->FullCost).c_str());
+				StatSeparator();
+				Stat("From scratch", FormatCoins(plan->FullCost), kPlainColor);
 			}
 			if (ImGui::Button("Copy list"))
 			{
@@ -952,11 +1072,21 @@ namespace mc
 			if (ImGui::BeginTable("##mc_shopping", 5, flags, ImVec2(0, tableHeight)))
 			{
 				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 215.0f);
-				ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 105.0f);
-				ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 105.0f);
-				ImGui::TableHeadersRow();
+				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 190.0f);
+				ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+				ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+				ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TableHeader("Item");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TableHeader("Source");
+				ImGui::TableSetColumnIndex(2);
+				ImGui::TableHeader("Quantity");
+				ImGui::TableSetColumnIndex(3);
+				ImGui::TableHeader("Unit price");
+				ImGui::TableSetColumnIndex(4);
+				ImGui::TableHeader("Total");
 
 				for (const auto& entry : plan->Shopping)
 				{
@@ -979,29 +1109,18 @@ namespace mc
 					}
 
 					ImGui::TableSetColumnIndex(2);
-					ImGui::Text("%d", entry.Quantity);
+					TextRight(FormatNumber(entry.Quantity));
 
 					ImGui::TableSetColumnIndex(3);
-					ImGui::TextUnformatted(ShoppingUnitPrice(entry).c_str());
+					TextRight(ShoppingUnitPrice(entry));
 
 					ImGui::TableSetColumnIndex(4);
-					ImGui::TextUnformatted(ShoppingTotalPrice(entry).c_str());
+					TextRight(ShoppingTotalPrice(entry));
 				}
 
 				ImGui::EndTable();
 			}
 
-			i64 tradingPostTotal = 0;
-			for (const auto& entry : plan->Shopping)
-			{
-				if (entry.Source == SourceKind::TradingPost)
-				{
-					tradingPostTotal += entry.TotalCost;
-				}
-			}
-			ImGui::Text("Trading Post total: %s", FormatCoins(tradingPostTotal).c_str());
-			ImGui::SameLine();
-			ImGui::TextDisabled("| Merchant and other gold costs: %s", FormatCoins(std::max<i64>(0, plan->RemainingCost - tradingPostTotal)).c_str());
 
 			if (plan->ResearchNotesRequired > 0)
 			{
@@ -1029,7 +1148,8 @@ namespace mc
 				}
 			}
 
-			ImGui::Text("Currencies and wallet costs");
+			ImGui::Spacing();
+			ImGui::TextColored(kPlainColor, "Currencies and wallet costs");
 			ImGui::SameLine();
 			ImGui::TextDisabled("(required / owned / missing)");
 			if (ImGui::BeginTable("##mc_currency", 4, flags, ImVec2(0, ImGui::GetContentRegionAvail().y)))
@@ -1038,7 +1158,15 @@ namespace mc
 				ImGui::TableSetupColumn("Required", ImGuiTableColumnFlags_WidthFixed, 110.0f);
 				ImGui::TableSetupColumn("Owned", ImGuiTableColumnFlags_WidthFixed, 110.0f);
 				ImGui::TableSetupColumn("Missing", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-				ImGui::TableHeadersRow();
+				ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TableHeader("Currency");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TableHeader("Required");
+				ImGui::TableSetColumnIndex(2);
+				ImGui::TableHeader("Owned");
+				ImGui::TableSetColumnIndex(3);
+				ImGui::TableHeader("Missing");
 
 				std::map<int, i64> rows = plan->CurrencyRequired;
 				for (const auto& pair : plan->CurrencyNeeded)
@@ -1086,17 +1214,18 @@ namespace mc
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextUnformatted(CurrencyName(aSnapshot.Currencies, pair.first).c_str());
 					ImGui::TableSetColumnIndex(1);
-					ImGui::TextUnformatted(CurrencyText(aSnapshot.Currencies, pair.first, pair.second).c_str());
+					TextRight(CurrencyText(aSnapshot.Currencies, pair.first, pair.second));
 					ImGui::TableSetColumnIndex(2);
-					ImGui::TextUnformatted(CurrencyText(aSnapshot.Currencies, pair.first, owned).c_str());
+					TextRight(CurrencyText(aSnapshot.Currencies, pair.first, owned));
 					ImGui::TableSetColumnIndex(3);
 					if (missing > 0)
 					{
-						ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.0f), "%s", CurrencyText(aSnapshot.Currencies, pair.first, missing).c_str());
+						const ImVec4 shortColor(0.95f, 0.55f, 0.35f, 1.0f);
+						TextRight(CurrencyText(aSnapshot.Currencies, pair.first, missing), &shortColor);
 					}
 					else
 					{
-						ImGui::TextColored(ImVec4(0.50f, 0.88f, 0.55f, 1.0f), "covered");
+						TextRight("covered", &kGoodColor);
 					}
 				}
 
@@ -1274,21 +1403,28 @@ namespace mc
 			}
 			if (plan->GoalCount > 1)
 			{
-				ImGui::Text("Crafting steps for %d tracked plans", plan->GoalCount);
+				ImGui::TextColored(kPlainColor, "Crafting steps for %d tracked plans", plan->GoalCount);
 			}
 			else
 			{
-				ImGui::Text("Crafting steps for %s", plan->GoalName.c_str());
+				ImGui::TextColored(kPlainColor, "Crafting steps for %s", plan->GoalName.c_str());
 			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("(%d steps in %d visits, %s remaining)", totalSteps,
-				static_cast<int>(groups.size()), FormatCoins(plan->RemainingCost).c_str());
+			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 96.0f);
 			if (ImGui::Button("Copy steps"))
 			{
 				CopyToClipboard(BuildStepsText(*plan, groups));
 				aApp.Notify("Crafting steps copied to the clipboard.");
 			}
-			ImGui::SameLine();
+
+			ImGui::Spacing();
+			Stat("Visits", std::to_string(static_cast<int>(groups.size())), kPlainColor);
+			StatSeparator();
+			Stat("Steps", std::to_string(totalSteps), kPlainColor);
+			StatSeparator();
+			Stat("Step cost", FormatCoins(groupCost), kFocusColor);
+			StatSeparator();
+			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			ImGui::Spacing();
 			ImGui::TextDisabled("Work top to bottom; each block is one place to go. Trading Post purchases are on the shopping list.");
 
 			// Achievement items are not station work, so they are called out before
@@ -1363,7 +1499,15 @@ namespace mc
 				ImGui::TableSetupColumn("Amount", ImGuiTableColumnFlags_WidthFixed, 100.0f);
 				ImGui::TableSetupColumn("Cost", ImGuiTableColumnFlags_WidthFixed, 110.0f);
 				ImGui::TableSetupScrollFreeze(0, 1);
-				ImGui::TableHeadersRow();
+				ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TableHeader("#");
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TableHeader("Step");
+				ImGui::TableSetColumnIndex(2);
+				ImGui::TableHeader("Amount");
+				ImGui::TableSetColumnIndex(3);
+				ImGui::TableHeader("Cost");
 
 				int number = 1;
 				for (const auto& group : groups)
@@ -1373,7 +1517,8 @@ namespace mc
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextDisabled("> ");
-					ImGui::TableSetColumnIndex(1);						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1.0f));
+					ImGui::TableSetColumnIndex(1);
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.80f, 0.40f, 1.0f));
 					ImGui::TextUnformatted(group.Title.c_str());
 					ImGui::PopStyleColor();
 					if (group.Visit > 1)
@@ -1396,7 +1541,7 @@ namespace mc
 					ImGui::TableSetColumnIndex(3);
 					if (group.Cost > 0)
 					{
-						ImGui::TextUnformatted(FormatCoins(group.Cost).c_str());
+						TextRight(FormatCoins(group.Cost));
 					}
 
 					for (const auto& step : group.Steps)
@@ -1445,16 +1590,16 @@ namespace mc
 						}
 
 						ImGui::TableSetColumnIndex(2);
-						ImGui::TextUnformatted(StepQuantity(step).c_str());
+						TextRight(StepQuantity(step));
 
 						ImGui::TableSetColumnIndex(3);
 						if (step.Cost > 0)
 						{
-							ImGui::TextUnformatted(FormatCoins(step.Cost).c_str());
+							TextRight(FormatCoins(step.Cost));
 						}
 						else
 						{
-							ImGui::TextDisabled("-");
+							TextRight("-");
 						}
 
 					}
@@ -1712,7 +1857,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.8 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.9 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "

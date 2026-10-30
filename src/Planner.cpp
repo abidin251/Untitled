@@ -361,6 +361,35 @@ namespace mc
 			return recipe;
 		}
 
+		// One way of running a combine whose main material can be any of a family of
+		// interchangeable items, built around one particular choice.
+		RecipeNode ChoiceRecipeFor(const RecipeNode& aNode, const ChoiceRecipe& aRecipe, int aChoice)
+		{
+			RecipeNode recipe;
+			recipe.Id = aNode.Id;
+			recipe.Type = "Recipe";
+			recipe.Quantity = aNode.Quantity;
+			recipe.Output = aRecipe.Output > 0 ? aRecipe.Output : 1;
+			recipe.Disciplines.push_back("Mystic Forge");
+			recipe.MultipleRecipes = aNode.MultipleRecipes;
+
+			RecipeNode chosen;
+			chosen.Id = aChoice;
+			chosen.Type = "Item";
+			chosen.Quantity = aRecipe.ChoiceCount;
+			recipe.Components.push_back(std::move(chosen));
+
+			if (aRecipe.DustItemId != 0 && aRecipe.DustCount > 0)
+			{
+				RecipeNode dust;
+				dust.Id = aRecipe.DustItemId;
+				dust.Type = "Item";
+				dust.Quantity = aRecipe.DustCount;
+				recipe.Components.push_back(std::move(dust));
+			}
+			return recipe;
+		}
+
 		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
 		{
 			PlanNode node;
@@ -442,16 +471,33 @@ namespace mc
 			// Forge promotion when the promotion table has one for it. Both are
 			// costed and the cheaper one is planned, so a promotion is never left out
 			// just because the graph already had a refinement recipe for the item.
-			std::vector<RecipeNode> routes;
+			// A route made up from a table here rather than the provider's graph is
+			// only trusted when its ingredients are priced; the provider's own recipe
+			// is taken at its word, since it may legitimately cost no coin at all.
+			struct Route
+			{
+				RecipeNode Recipe;
+				bool FromProvider = false;
+			};
+			std::vector<Route> routes;
 			if (aNode.IsRecipe())
 			{
-				routes.push_back(aNode);
+				routes.push_back({ aNode, true });
 			}
 			if (!aNode.LeafOnly)
 			{
 				if (const PromotionRecipe* promotion = FindPromotion(aNode.Id))
 				{
-					routes.push_back(PromotionRecipeFor(aNode, *promotion));
+					routes.push_back({ PromotionRecipeFor(aNode, *promotion), false });
+				}
+				// A combine whose material can be any one of a family is tried with
+				// every choice, so the cheapest gemstone is the one planned.
+				for (const ChoiceRecipe* choice : FindChoiceRecipes(aNode.Id))
+				{
+					for (int option : choice->Choices)
+					{
+						routes.push_back({ ChoiceRecipeFor(aNode, *choice, option), false });
+					}
 				}
 			}
 
@@ -480,8 +526,9 @@ namespace mc
 			i64 craftCost = 0;
 			int crafts = 0;
 			bool haveRoute = false;
-			for (const auto& route : routes)
+			for (const auto& entry : routes)
 			{
+				const RecipeNode& route = entry.Recipe;
 				const int routeCrafts = route.Output > 0.0
 					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / route.Output - 1e-9)))
 					: node.Remaining;
@@ -501,7 +548,7 @@ namespace mc
 				// A promotion whose ingredients the item data does not price at all
 				// would come out free and the plan would charge nothing for the item,
 				// so it is only weighed when its bill is actually known.
-				const bool promotion = KindForRecipe(route) == SourceKind::MysticForge && !aNode.IsRecipe();
+				const bool promotion = !entry.FromProvider;
 				if (promotion)
 				{
 					// A combine whose ingredients are not priced at all comes out free,

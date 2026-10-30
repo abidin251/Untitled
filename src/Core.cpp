@@ -248,6 +248,80 @@ namespace mc
 		return it == lookup.end() ? nullptr : it->second;
 	}
 
+	// Amalgamated Gemstone is made at the Mystic Forge from nine of any single
+	// tier-6 crest, orb or doubloon plus a pile of crystalline dust, or seventy-five
+	// of one for ten gemstones. The provider models fifty recipes for it, one per
+	// gemstone, but only ever returns one, so the family is listed here: without it
+	// the plan compared the single variant it was given (whichever gemstone happened
+	// to be dearest) with the listing and told the player to buy a gemstone that the
+	// Forge makes for less.
+	const std::vector<ChoiceRecipe>& ChoiceRecipes()
+	{
+		static const std::vector<ChoiceRecipe> recipes = []() {
+			const std::vector<int> gems = {
+				24514, // Crest of the Assassin
+				24518, // Crest of the Magi
+				24532, // Crest of the Rabid
+				24533, // Crest of the Shaman
+				24524, // Crest of the Soldier
+				72436, // Agate Orb
+				42010, // Azurite Orb
+				24520, // Beryl Orb
+				76491, // Black Diamond
+				24512, // Chrysocola Orb
+				24510, // Coral Orb
+				75654, // Ebony Orb
+				24515, // Emerald Orb
+				74988, // Flax Blossom
+				76179, // Freshwater Pearl
+				72315, // Maguuma Burl
+				70957, // Maguuma Lily
+				72504, // Moonstone Orb
+				24522, // Opal Orb
+				24508, // Ruby Orb
+				24516, // Sapphire Orb
+				24884, // Copper Doubloon
+				24502, // Silver Doubloon
+				24772, // Gold Doubloon
+				24773  // Platinum Doubloon
+			};
+
+			std::vector<ChoiceRecipe> result;
+			ChoiceRecipe single;
+			single.ItemId = 68063;
+			single.Output = 1;
+			single.ChoiceCount = 9;
+			single.DustItemId = 24277; // Pile of Crystalline Dust
+			single.DustCount = 1;
+			single.Choices = gems;
+			result.push_back(std::move(single));
+
+			ChoiceRecipe bulk;
+			bulk.ItemId = 68063;
+			bulk.Output = 10;
+			bulk.ChoiceCount = 75;
+			bulk.DustItemId = 24277;
+			bulk.DustCount = 1;
+			bulk.Choices = gems;
+			result.push_back(std::move(bulk));
+			return result;
+		}();
+		return recipes;
+	}
+
+	std::vector<const ChoiceRecipe*> FindChoiceRecipes(int aItemId)
+	{
+		std::vector<const ChoiceRecipe*> result;
+		for (const auto& recipe : ChoiceRecipes())
+		{
+			if (recipe.ItemId == aItemId)
+			{
+				result.push_back(&recipe);
+			}
+		}
+		return result;
+	}
+
 	std::string ToLower(std::string aValue)
 	{
 		std::transform(aValue.begin(), aValue.end(), aValue.begin(), [](unsigned char c) {

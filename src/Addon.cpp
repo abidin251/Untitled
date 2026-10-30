@@ -499,6 +499,22 @@ namespace mc
 						walk(component);
 					}
 				}
+				// The interchangeable materials a choice recipe can use are priced
+				// too, or the plan could only cost the variant the provider sent.
+				for (const ChoiceRecipe* choice : FindChoiceRecipes(aNode.Id))
+				{
+					RecipeNode dust;
+					dust.Id = choice->DustItemId;
+					dust.Type = "Item";
+					walk(dust);
+					for (int option : choice->Choices)
+					{
+						RecipeNode component;
+						component.Id = option;
+						component.Type = "Item";
+						walk(component);
+					}
+				}
 			}
 			for (const auto& child : aNode.Components)
 			{
@@ -1228,7 +1244,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 9, 8, 0 };
+	g_Definition.Version = { 1, 9, 9, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;
