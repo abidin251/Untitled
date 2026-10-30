@@ -275,6 +275,7 @@ namespace mc
 				aOut.WindowVisible = parsed.value("windowVisible", aOut.WindowVisible);
 				aOut.CombineTracked = parsed.value("combineTracked", aOut.CombineTracked);
 				aOut.IncludeResearchNotes = parsed.value("includeResearchNotes", aOut.IncludeResearchNotes);
+				aOut.ExcludeGuildCommendations = parsed.value("excludeGuildCommendations", aOut.ExcludeGuildCommendations);
 				aOut.SelectedItem = parsed.value("selectedItem", aOut.SelectedItem);
 				aOut.RecipeBase = parsed.value("recipeBase", aOut.RecipeBase);
 
@@ -331,6 +332,7 @@ namespace mc
 			parsed["windowVisible"] = aSettings.WindowVisible;
 			parsed["combineTracked"] = aSettings.CombineTracked;
 			parsed["includeResearchNotes"] = aSettings.IncludeResearchNotes;
+			parsed["excludeGuildCommendations"] = aSettings.ExcludeGuildCommendations;
 			parsed["selectedItem"] = aSettings.SelectedItem;
 			parsed["recipeBase"] = aSettings.RecipeBase;
 			parsed["tracked"] = aSettings.Tracked;

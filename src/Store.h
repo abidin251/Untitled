@@ -24,6 +24,7 @@ namespace mc
 		bool WindowVisible = false;
 		bool CombineTracked = true;
 		bool IncludeResearchNotes = false;
+		bool ExcludeGuildCommendations = false;
 		int SelectedItem = 0;
 		std::string RecipeBase = "https://api.gw2efficiency.com";
 		std::vector<int> Tracked;

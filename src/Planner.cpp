@@ -4,6 +4,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <queue>
 #include <set>
 #include <utility>
@@ -293,6 +294,73 @@ namespace mc
 			aContext.TimeGatedNeeds.push_back(std::move(need));
 		}
 
+		// Philosopher's Stones and Mystic Crystals are handed over by the Mystic
+		// Forge attendant for spirit shards, which the plan prices at no coin.
+		constexpr int kPhilosophersStoneItem = 20796;
+		constexpr int kMysticCrystalItem = 20799;
+		constexpr int kSpiritShardCurrency = 23;
+
+		void MakeAttendantPurchase(RecipeNode& aNode, double aOutput, double aShardsPerCraft)
+		{
+			RecipeNode shards;
+			shards.Id = kSpiritShardCurrency;
+			shards.Type = "Currency";
+			shards.Quantity = aShardsPerCraft;
+
+			aNode.Type = "Recipe";
+			aNode.Output = aOutput;
+			aNode.Disciplines = { "Merchant" };
+			aNode.MerchantName = "Miyani / Mystic Forge Attendant";
+			aNode.MerchantLocations = "Mystic Forge";
+			aNode.Components = { shards };
+			aNode.MerchantCurrencyId = kSpiritShardCurrency;
+			aNode.MerchantCurrencyAmount = aShardsPerCraft;
+		}
+
+		// The provider lists a recipe for a material it can make, but the fine and
+		// rare material promotions are not in it at all, so a plan only ever saw the
+		// Trading Post listing for them. The Forge recipe is filled in here from the
+		// promotion table instead, and the seed it consumes is bought rather than
+		// promoted again, which would otherwise recurse one item at a time.
+		RecipeNode PromotionRecipeFor(const RecipeNode& aNode, const PromotionRecipe& aPromotion)
+		{
+			RecipeNode recipe;
+			recipe.Id = aNode.Id;
+			recipe.Type = "Recipe";
+			recipe.Quantity = aNode.Quantity;
+			// A combine eats the one of the material it was given, so the amount a
+			// craft actually adds is the table's yield minus that seed. Planning the
+			// gross figure would promise ten ore for a combine that nets nine.
+			recipe.Output = aPromotion.Output > 1 ? aPromotion.Output - 1 : 1;
+			recipe.Disciplines.push_back("Mystic Forge");
+			recipe.MultipleRecipes = aNode.MultipleRecipes;
+			for (const auto& ingredient : aPromotion.Ingredients)
+			{
+				if (ingredient.ItemId == 0 || ingredient.Count <= 0)
+				{
+					continue;
+				}
+				RecipeNode component;
+				component.Id = ingredient.ItemId;
+				component.Type = "Item";
+				component.Quantity = ingredient.Count;
+				component.LeafOnly = ingredient.ItemId == aNode.Id;
+				// A stone or a crystal is bought from the Mystic Forge attendant with
+				// spirit shards, which cost no coin: left as a plain item the plan
+				// could not source it and would refuse the whole promotion.
+				if (ingredient.ItemId == kPhilosophersStoneItem)
+				{
+					MakeAttendantPurchase(component, 10, 1);
+				}
+				else if (ingredient.ItemId == kMysticCrystalItem)
+				{
+					MakeAttendantPurchase(component, 5, 3);
+				}
+				recipe.Components.push_back(std::move(component));
+			}
+			return recipe;
+		}
+
 		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
 		{
 			PlanNode node;
@@ -370,26 +438,105 @@ namespace mc
 			const i64 unitPrice = UnitPrice(aContext, aNode.Id);
 			node.Tradable = unitPrice > 0 && ItemIsTradable(aContext, aNode.Id);
 
+			// Every route that can make the item: the provider's recipe, and the
+			// Forge promotion when the promotion table has one for it. Both are
+			// costed and the cheaper one is planned, so a promotion is never left out
+			// just because the graph already had a refinement recipe for the item.
+			std::vector<RecipeNode> routes;
 			if (aNode.IsRecipe())
 			{
-				const int crafts = aNode.Output > 0.0
-					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / aNode.Output - 1e-9)))
-					: node.Remaining;
-				node.Crafts = crafts;
+				routes.push_back(aNode);
+			}
+			if (!aNode.LeafOnly)
+			{
+				if (const PromotionRecipe* promotion = FindPromotion(aNode.Id))
+				{
+					routes.push_back(PromotionRecipeFor(aNode, *promotion));
+				}
+			}
 
-				PlanContext scratch = aContext;
-				i64 craftCost = 0;
-				for (const auto& component : aNode.Components)
+			// A merchant purchase the plan was told to leave out: the item still has
+			// to be handed over, but it is not charged to the wallet and its
+			// commendations are not counted as a requirement.
+			if (!routes.empty() && aContext.Options.ExcludeGuildCommendations
+				&& KindForRecipe(aNode) == SourceKind::Vendor
+				&& aNode.MerchantCurrencyId == kGuildCommendationCurrency)
+			{
+				node.Source = SourceKind::Vendor;
+				node.MerchantDetail = MerchantLabel(aNode);
+				node.SourceDetail = node.MerchantDetail + " - guild commendations excluded";
+				node.Crafts = node.Remaining;
+				AddShoppingRow(aContext, node, SourceKind::Vendor, 0, 0, true, false);
+				ShoppingItem& row = aContext.Shopping.back();
+				row.SourceDetail = "Guild Commendations excluded from the plan";
+				row.PriceText = CurrencyPriceText(aContext, kGuildCommendationCurrency, static_cast<i64>(aNode.MerchantCurrencyAmount + 0.5));
+				row.TotalPriceText = CurrencyPriceText(aContext, kGuildCommendationCurrency, static_cast<i64>(aNode.MerchantCurrencyAmount * node.Remaining + 0.5));
+				return node;
+			}
+
+			RecipeNode recipe;
+			std::optional<PlanContext> scratch;
+			std::vector<PlanNode> routeChildren;
+			i64 craftCost = 0;
+			int crafts = 0;
+			bool haveRoute = false;
+			for (const auto& route : routes)
+			{
+				const int routeCrafts = route.Output > 0.0
+					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / route.Output - 1e-9)))
+					: node.Remaining;
+
+				PlanContext candidate = aContext;
+				i64 candidateCost = 0;
+				std::vector<PlanNode> candidateChildren;
+				for (const auto& component : route.Components)
 				{
 					RecipeNode scaled = component;
-					scaled.Quantity = component.Quantity * static_cast<double>(crafts);
-					PlanNode child = BuildNode(scratch, scaled, aDepth + 1);
-					craftCost += child.TotalCost;
-					node.Children.push_back(std::move(child));
+					scaled.Quantity = component.Quantity * static_cast<double>(routeCrafts);
+					PlanNode child = BuildNode(candidate, scaled, aDepth + 1);
+					candidateCost += child.TotalCost;
+					candidateChildren.push_back(std::move(child));
 				}
 
-				const bool vendorNode = KindForRecipe(aNode) == SourceKind::Vendor;
-				const bool promotion = KindForRecipe(aNode) == SourceKind::MysticForge;
+				// A promotion whose ingredients the item data does not price at all
+				// would come out free and the plan would charge nothing for the item,
+				// so it is only weighed when its bill is actually known.
+				const bool promotion = KindForRecipe(route) == SourceKind::MysticForge && !aNode.IsRecipe();
+				if (promotion)
+				{
+					// A combine whose ingredients are not priced at all comes out free,
+					// and so would the item it makes: the route is only trusted when
+					// every one of its materials is known.
+					bool unknown = false;
+					for (const auto& child : candidateChildren)
+					{
+						unknown = unknown || child.Source == SourceKind::Unknown;
+					}
+					if (unknown || candidateCost <= 0)
+					{
+						continue;
+					}
+				}
+				// The routes all make the same amount of the same item, so the cheaper
+				// bill is the cheaper route.
+				if (!haveRoute || candidateCost < craftCost)
+				{
+					haveRoute = true;
+					recipe = route;
+					crafts = routeCrafts;
+					craftCost = candidateCost;
+					scratch.emplace(candidate);
+					routeChildren = std::move(candidateChildren);
+				}
+			}
+
+			if (haveRoute)
+			{
+				node.Crafts = crafts;
+				node.Children = std::move(routeChildren);
+
+				const bool vendorNode = KindForRecipe(recipe) == SourceKind::Vendor;
+				const bool promotion = KindForRecipe(recipe) == SourceKind::MysticForge;
 				const Preference preference = GetPreference(aContext, aNode.Id);
 				const i64 buyCost = node.Tradable ? unitPrice * node.Remaining : 0;
 				bool buy = false;
@@ -417,8 +564,8 @@ namespace mc
 				{
 					node.Children.clear();
 					node.Source = SourceKind::TradingPost;
-					node.SourceDetail = vendorNode && !aNode.MerchantName.empty()
-						? "Buy from Trading Post - cheaper than " + aNode.MerchantName
+					node.SourceDetail = vendorNode && !recipe.MerchantName.empty()
+						? "Buy from Trading Post - cheaper than " + recipe.MerchantName
 						: "Buy from Trading Post";
 					node.UnitCost = unitPrice;
 					node.TotalCost = buyCost;
@@ -427,28 +574,28 @@ namespace mc
 				}
 				else
 				{
-					aContext.Pool = std::move(scratch.Pool);
-					aContext.CurrencyPool = std::move(scratch.CurrencyPool);
-					aContext.Shopping = std::move(scratch.Shopping);
-					aContext.CurrencyRequired = std::move(scratch.CurrencyRequired);
-					aContext.CurrencyNeeded = std::move(scratch.CurrencyNeeded);
-					aContext.NodeCount = scratch.NodeCount;
-					aContext.Truncated = scratch.Truncated;
-					aContext.AchievementNeeds = std::move(scratch.AchievementNeeds);
-					aContext.TimeGatedNeeds = std::move(scratch.TimeGatedNeeds);
-					node.Source = KindForRecipe(aNode);
-					node.Discipline = aNode.Disciplines.empty() ? "" : aNode.Disciplines.front();
-					node.SourceDetail = RecipeDetail(aNode, node.Source);
+					aContext.Pool = std::move(scratch->Pool);
+					aContext.CurrencyPool = std::move(scratch->CurrencyPool);
+					aContext.Shopping = std::move(scratch->Shopping);
+					aContext.CurrencyRequired = std::move(scratch->CurrencyRequired);
+					aContext.CurrencyNeeded = std::move(scratch->CurrencyNeeded);
+					aContext.NodeCount = scratch->NodeCount;
+					aContext.Truncated = scratch->Truncated;
+					aContext.AchievementNeeds = std::move(scratch->AchievementNeeds);
+					aContext.TimeGatedNeeds = std::move(scratch->TimeGatedNeeds);
+					node.Source = KindForRecipe(recipe);
+					node.Discipline = recipe.Disciplines.empty() ? "" : recipe.Disciplines.front();
+					node.SourceDetail = RecipeDetail(recipe, node.Source);
 					node.TotalCost = craftCost;
 					node.UnitCost = node.Remaining > 0 ? craftCost / node.Remaining : 0;
 					node.Crafts = crafts;
 					if (node.Source == SourceKind::Vendor)
 					{
-						node.MerchantDetail = MerchantLabel(aNode);
-						AddVendorRow(aContext, node, aNode);
+						node.MerchantDetail = MerchantLabel(recipe);
+						AddVendorRow(aContext, node, recipe);
 					}
-					AddAchievementNeed(aContext, node, aNode);
-					AddTimeGatedNeed(aContext, node, aNode);
+					AddAchievementNeed(aContext, node, recipe);
+					AddTimeGatedNeed(aContext, node, recipe);
 				}
 				return node;
 			}

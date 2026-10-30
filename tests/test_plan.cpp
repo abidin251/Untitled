@@ -1255,6 +1255,163 @@ namespace
 		Check(plan.RemainingCost == 2000000, "the plan charges the merchant price and not the stale listing");
 	}
 
+	// The fine and rare material promotions are not in the acquisition graph at
+	// all, so the planner fills them in from the promotion table: 250 mithril ore,
+	// a crystalline dust and five stones make ten orichalcum ore, and that is
+	// weighed against the listing like any other recipe.
+	void TestFineMaterialPromotionRoute()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[19701].Id = 19701;
+		items[19701].Name = "Orichalcum Ore";
+		items[19700].Id = 19700;
+		items[19700].Name = "Mithril Ore";
+		items[24277].Id = 24277;
+		items[24277].Name = "Pile of Crystalline Dust";
+		items[20796].Id = 20796;
+		items[20796].Name = "Philosopher's Stone";
+
+		PriceDb prices;
+		prices[19701].Id = 19701;
+		prices[19701].Sell = 10000;
+		prices[19700].Id = 19700;
+		prices[19700].Sell = 10;
+		prices[24277].Id = 24277;
+		prices[24277].Sell = 100;
+		prices[20796].Id = 20796;
+		prices[20796].Sell = 1000;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// Orichalcum ore promotes ten at a time, but the combine eats the seed it
+		// was given, so one craft nets nine: ten ore is two crafts of 250 mithril
+		// ore, a seed at its listing and five dusts, which beats the 1 gold
+		// listing. The stones cost spirit shards rather than coin.
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(plan.Root.Children.size() == 1, "the ore is part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			const PlanNode& ore = plan.Root.Children[0];
+			Check(ore.Source == SourceKind::MysticForge, "a promotion cheaper than the listing is the route the plan takes");
+			Check(ore.Crafts == 2 && ore.TotalCost == 26000, "the promotion is charged for the materials it consumes");
+			// The seed the combine consumes is bought: promoting it again would
+			// recurse one item at a time and never reach a price.
+			bool seedBought = false;
+			for (const auto& child : ore.Children)
+			{
+				if (child.Id == 19701)
+				{
+					seedBought = child.Source == SourceKind::TradingPost && child.Children.empty() && child.TotalCost == 20000;
+				}
+			}
+			Check(seedBought, "the seed of the promoted material is bought rather than promoted again");
+		}
+		Check(plan.RemainingCost == 26000, "the plan charges the promotion instead of the listing");
+
+		// With a cheap enough listing the ore is bought instead.
+		PriceDb cheap = prices;
+		cheap[19701].Sell = 100;
+		const Plan bought = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, items, cheap, {}, {}, options, {});
+		Check(bought.Root.Children.size() == 1 && bought.Root.Children[0].Source == SourceKind::TradingPost, "a promotion dearer than the listing is not used");
+
+		// An ingredient the item data cannot price would make the combine look free,
+		// so the promotion is ignored rather than charging nothing for the ore.
+		const Plan unpriced = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, {}, {}, {}, {}, options, {});
+		Check(unpriced.Root.Children.size() == 1 && unpriced.Root.Children[0].Source != SourceKind::MysticForge, "an unpriced promotion is not taken for free");
+	}
+
+	// An item that has both a refinement recipe and a promotion is planned from
+	// whichever of the routes comes to less, not from the recipe alone.
+	void TestPromotionVersusRecipe()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[19684].Id = 19684;
+		items[19684].Name = "Mithril Ingot";
+		items[19700].Id = 19700;
+		items[19700].Name = "Mithril Ore";
+		items[19681].Id = 19681;
+		items[19681].Name = "Darksteel Ingot";
+		items[24275].Id = 24275;
+		items[24275].Name = "Pile of Luminous Dust";
+		items[20796].Id = 20796;
+		items[20796].Name = "Philosopher's Stone";
+
+		PriceDb prices;
+		prices[19684].Id = 19684;
+		prices[19684].Sell = 1000;
+		prices[19700].Id = 19700;
+		prices[19700].Sell = 100;
+		prices[19681].Id = 19681;
+		prices[19681].Sell = 1;
+		prices[24275].Id = 24275;
+		prices[24275].Sell = 10;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// Refining: two ore per ingot, so 2000 copper for ten. The promotion nets
+		// 39 ingots a craft for 250 darksteel, a seed and five dusts: 1300 copper.
+		const RecipeNode refined = Recipe(19684, 10, 1, { ItemNode(19700, 2) }, "Weaponsmith");
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { refined }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(plan.Root.Children.size() == 1, "the ingots are part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			const PlanNode& ingots = plan.Root.Children[0];
+			Check(ingots.Source == SourceKind::MysticForge, "the cheaper of the recipe and the promotion is the route taken");
+			Check(ingots.TotalCost == 1300, "the promotion is charged for what the combine consumes");
+		}
+
+		// With the promotion's material expensive the refinement is the cheaper one.
+		PriceDb dear = prices;
+		dear[19681].Sell = 1000;
+		const Plan crafted = BuildPlan(Recipe(100, 1, 1, { refined }, "Weaponsmith"), 1, items, dear, {}, {}, options, {});
+		Check(crafted.Root.Children.size() == 1 && crafted.Root.Children[0].Source == SourceKind::Craft, "a promotion dearer than the recipe is not used");
+	}
+
+	// Guild commendations are a currency the plan can be told to leave out: the
+	// purchase still needs the item, but it is not charged and the wallet does not
+	// ask for the commendations.
+	void TestGuildCommendationExclusion()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[24275].Id = 24275;
+		items[24275].Name = "Pile of Luminous Dust";
+
+		CurrencyDb currencies;
+		currencies[kGuildCommendationCurrency].Id = kGuildCommendationCurrency;
+		currencies[kGuildCommendationCurrency].Name = "Guild Commendation";
+
+		const RecipeNode commendations = MerchantRecipe(24275, 3, kGuildCommendationCurrency, 1, "Guild Trader", "Guild Hall");
+		const RecipeNode root = Recipe(100, 1, 1, { commendations }, "Artificer");
+
+		const Plan counted = BuildPlan(root, 1, items, {}, currencies, {}, {}, {});
+		auto countedIt = counted.CurrencyRequired.find(kGuildCommendationCurrency);
+		Check(countedIt != counted.CurrencyRequired.end() && countedIt->second == 3, "guild commendations are counted by default");
+
+		PlanOptions options;
+		options.ExcludeGuildCommendations = true;
+		const Plan excluded = BuildPlan(root, 1, items, {}, currencies, {}, options, {});
+		Check(excluded.CurrencyRequired.find(kGuildCommendationCurrency) == excluded.CurrencyRequired.end(), "an excluded purchase asks for no commendations");
+		Check(excluded.RemainingCost == 0, "an excluded purchase costs no coin");
+		Check(excluded.Root.Children.size() == 1 && excluded.Root.Children[0].Source == SourceKind::Vendor, "the item stays on the plan as a merchant purchase");
+		bool listed = false;
+		for (const auto& entry : excluded.Shopping)
+		{
+			if (entry.Id == 24275)
+			{
+				listed = entry.TotalCost == 0 && entry.SourceDetail.find("Guild Commendations") != std::string::npos;
+			}
+		}
+		Check(listed, "the excluded item is listed without being charged");
+	}
+
 	// Work that can only be done a few times a day or week is called out with the
 	// steps, since the batch cannot be finished in one sitting.
 	void TestTimeGatedItems()
@@ -1362,6 +1519,9 @@ int main()
 	TestNoteYieldAndCheapestSource();
 	TestMaterialPromotionVersusTradingPost();
 	TestAccountBoundItemIgnoresTradingPostPrice();
+	TestFineMaterialPromotionRoute();
+	TestPromotionVersusRecipe();
+	TestGuildCommendationExclusion();
 	TestTimeGatedItems();
 	TestStepGroups();
 	TestStepsFollowDependencies();

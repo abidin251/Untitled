@@ -12,6 +12,7 @@ namespace mc
 
 	// Wallet currency ids the planner treats specially.
 	constexpr int kCoinCurrency = 1;
+	constexpr int kGuildCommendationCurrency = 16;
 	constexpr int kResearchNoteCurrency = 61;
 
 	// Crafted items that are cheap to make and are researched into notes: the
@@ -39,6 +40,30 @@ namespace mc
 	// the one every legendary gift needs. Returns what awards the item, or null for
 	// everything else.
 	const char* AchievementItemDetail(int aItemId);
+
+	// One material a Mystic Forge promotion consumes.
+	struct PromotionIngredient
+	{
+		int ItemId = 0;
+		int Count = 0;
+	};
+
+	// A Mystic Forge promotion: cheaper materials plus a little dust and a stone
+	// turn into more of a dearer material. The acquisition provider lists the
+	// core-to-lodestone promotions but has no entry for the fine and rare material
+	// ones, so those come from the wiki's promotion tables and the planner weighs
+	// them against the Trading Post like any other recipe.
+	struct PromotionRecipe
+	{
+		int ItemId = 0;   // the promoted material
+		int Output = 1;   // how many one combine returns
+		std::vector<PromotionIngredient> Ingredients;
+	};
+
+	const std::vector<PromotionRecipe>& PromotionRecipes();
+
+	// The promotion for this item, or null when the Forge has no such recipe.
+	const PromotionRecipe* FindPromotion(int aItemId);
 
 	std::string FormatCoins(i64 aCopper);
 	std::string ToLower(std::string aValue);
@@ -138,6 +163,9 @@ namespace mc
 		int WeeklyCap = 0;
 		int MerchantCurrencyId = 0;          // what a merchant charges (1 = coin)
 		double MerchantCurrencyAmount = 0.0; // amount of that currency per item
+		// Bought rather than worked on, whatever recipe it belongs to: a promotion
+		// consumes one of the item it makes, and that seed is simply bought.
+		bool LeafOnly = false;
 
 		bool IsCurrency() const { return Type == "Currency"; }
 		bool IsRecipe() const { return Type == "Recipe" && !Components.empty(); }
@@ -150,6 +178,9 @@ namespace mc
 		bool IncludeAccountItems = true;
 		bool ShowCompleted = true;
 		bool IncludeResearchNotes = false;   // price the research notes a plan needs
+		// Leave guild commendation purchases out of the plan instead of counting
+		// them, for players who do not want to spend the commendations.
+		bool ExcludeGuildCommendations = false;
 		// Crafted items whose craft can be turned into research notes; the plan
 		// prices each of them and charges the cheapest one per note.
 		const std::vector<RecipeNode>* ResearchNoteSources = nullptr;

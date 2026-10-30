@@ -1588,6 +1588,7 @@ namespace mc
 			changed |= ImGui::Checkbox("Subtract owned materials from the plan", &aApp.Settings.IncludeAccountItems);
 			changed |= ImGui::Checkbox("Show completed entries in the tree", &aApp.Settings.ShowCompleted);
 			changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
+			changed |= ImGui::Checkbox("Exclude guild commendation purchases", &aApp.Settings.ExcludeGuildCommendations);
 			if (changed)
 			{
 				aApp.SaveSettingsNow();
@@ -1597,6 +1598,7 @@ namespace mc
 				}
 				aApp.RefreshTrackedShopping();
 			}
+			ImGui::TextDisabled("Guild commendations are left out of the plan: the purchases stay listed without being charged to the wallet.");
 
 			ImGui::Spacing();
 			ImGui::TextUnformatted("Research notes");
@@ -1710,7 +1712,7 @@ namespace mc
 		void DrawAboutTab(App& aApp)
 		{
 			ImGui::TextUnformatted("Mystic Crafting - Nexus port");
-			ImGui::TextDisabled("Version 1.9.7 | API revision %d", NEXUS_API_VERSION);
+			ImGui::TextDisabled("Version 1.9.8 | API revision %d", NEXUS_API_VERSION);
 			ImGui::Separator();
 			ImGui::TextWrapped(
 				"A clean-room port of the Blish HUD Mystic Crafting module. It builds a complete acquisition tree for "
@@ -1875,17 +1877,18 @@ namespace mc
 		ImGui::Separator();
 		bool changed = false;
 		changed |= ImGui::Checkbox("Prefer buying tradable components", &aApp.Settings.PreferBuyingTradable);
-		changed |= ImGui::Checkbox("Subtract owned materials", &aApp.Settings.IncludeAccountItems);			changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
-			changed |= ImGui::Checkbox("Include research note crafting cost", &aApp.Settings.IncludeResearchNotes);
-			if (changed)
+		changed |= ImGui::Checkbox("Subtract owned materials", &aApp.Settings.IncludeAccountItems);
+		changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
+		changed |= ImGui::Checkbox("Include research note crafting cost", &aApp.Settings.IncludeResearchNotes);
+		changed |= ImGui::Checkbox("Exclude guild commendation purchases", &aApp.Settings.ExcludeGuildCommendations);		if (changed)
+		{
+			aApp.SaveSettingsNow();
+			if (aApp.SelectedItem != 0)
 			{
-				aApp.SaveSettingsNow();
-				if (aApp.SelectedItem != 0)
-				{
-					aApp.LoadPlan(aApp.SelectedItem, false);
-				}
-				aApp.RefreshTrackedShopping();
+				aApp.LoadPlan(aApp.SelectedItem, false);
 			}
-			ImGui::TextDisabled("The API key and account sources are configured in the Account tab.");
+			aApp.RefreshTrackedShopping();
+		}
+		ImGui::TextDisabled("The API key and account sources are configured in the Account tab.");
 	}
 }

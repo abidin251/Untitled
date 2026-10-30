@@ -486,6 +486,19 @@ namespace mc
 			if (!aNode.IsCurrency() && aNode.Id != 0 && seen.insert(aNode.Id).second)
 			{
 				ids.push_back(aNode.Id);
+				// A fine or rare material promotion is not in the provider's graph,
+				// so the materials one of them consumes have to be fetched here or the
+				// plan cannot price the combine.
+				if (const PromotionRecipe* promotion = FindPromotion(aNode.Id))
+				{
+					for (const auto& ingredient : promotion->Ingredients)
+					{
+						RecipeNode component;
+						component.Id = ingredient.ItemId;
+						component.Type = "Item";
+						walk(component);
+					}
+				}
 			}
 			for (const auto& child : aNode.Components)
 			{
@@ -760,6 +773,7 @@ namespace mc
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
+		options.ExcludeGuildCommendations = aSettings.ExcludeGuildCommendations;
 		if (hasResearchSources)
 		{
 			options.ResearchNoteSources = &researchSources;
@@ -827,6 +841,7 @@ namespace mc
 		options.BuyOrderPrices = aSettings.BuyOrderPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
+		options.ExcludeGuildCommendations = aSettings.ExcludeGuildCommendations;
 		if (hasResearchSources)
 		{
 			options.ResearchNoteSources = &researchSources;
@@ -1213,7 +1228,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 9, 7, 0 };
+	g_Definition.Version = { 1, 9, 8, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;
