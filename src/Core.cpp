@@ -131,10 +131,8 @@ namespace mc
 		// result, output, lower id, lower count, seed id, seed count, dust id,
 		// dust count, stone id, stone count.
 		static const int rows[][10] = {
-			{ 24358, 5, 24341, 50, 24358, 1, 24277, 5, 20796, 5 },
 			{ 19725, 10, 19722, 250, 19725, 1, 24277, 5, 20796, 5 },
 			{ 19712, 10, 19709, 250, 19712, 1, 24277, 5, 20796, 10 },
-			{ 24289, 5, 24288, 50, 24289, 1, 24277, 5, 20796, 5 },
 			{ 19742, 40, 19740, 250, 19742, 1, 24274, 5, 20796, 4 },
 			{ 19746, 10, 19747, 250, 19746, 1, 24277, 5, 20796, 10 },
 			{ 19744, 40, 19742, 250, 19744, 1, 24274, 5, 20796, 6 },
@@ -150,7 +148,6 @@ namespace mc
 			{ 19736, 40, 19734, 250, 19736, 1, 24274, 5, 20796, 6 },
 			{ 19735, 40, 19736, 250, 19735, 1, 24276, 5, 20796, 8 },
 			{ 19733, 40, 19738, 250, 19733, 1, 24273, 5, 20796, 2 },
-			{ 24300, 5, 24299, 50, 24300, 1, 24277, 5, 20796, 5 },
 			{ 19722, 40, 19724, 250, 19722, 1, 24276, 5, 20796, 4 },
 			{ 19709, 40, 19711, 250, 19709, 1, 24276, 5, 20796, 8 },
 			{ 24363, 7, 24298, 50, 24363, 1, 24275, 5, 20796, 3 },
@@ -178,7 +175,6 @@ namespace mc
 			{ 19686, 40, 19682, 250, 19686, 1, 24275, 5, 20796, 6 },
 			{ 19702, 20, 19699, 250, 19702, 1, 24274, 5, 20796, 2 },
 			{ 24282, 7, 24281, 50, 24282, 1, 24276, 5, 20796, 4 },
-			{ 24283, 5, 24282, 50, 24283, 1, 24277, 5, 20796, 5 },
 			{ 19731, 40, 19730, 250, 19731, 1, 24274, 5, 20796, 3 },
 			{ 24286, 7, 24285, 50, 24286, 1, 24274, 5, 20796, 2 },
 			{ 19727, 40, 19726, 250, 19727, 1, 24274, 5, 20796, 2 },
@@ -205,7 +201,6 @@ namespace mc
 			{ 24295, 5, 24294, 50, 24295, 1, 24277, 5, 20796, 5 },
 			{ 24293, 7, 24292, 50, 24293, 1, 24275, 5, 20796, 3 },
 			{ 24291, 7, 24290, 50, 24291, 1, 24273, 5, 20796, 1 },
-			{ 24351, 5, 24350, 50, 24351, 1, 24277, 5, 20796, 5 },
 			{ 24357, 5, 24356, 50, 24357, 1, 24277, 5, 20796, 5 },
 			{ 19739, 40, 19718, 250, 19739, 1, 24273, 5, 20796, 1 },
 			{ 24277, 6, 24276, 250, 24277, 1, 20799, 5, 20796, 5 },
@@ -227,6 +222,36 @@ namespace mc
 				recipe.Ingredients.push_back({ row[4], row[5] });
 				recipe.Ingredients.push_back({ row[6], row[7] });
 				recipe.Ingredients.push_back({ row[8], row[9] });
+				result.push_back(std::move(recipe));
+			}
+
+			// The rare material promotions are a different combine from the fine ones
+			// in the table above: two of the tier below, a pile of the tier's dust, a
+			// bottle of Elonian Wine and a Mystic Crystal turn into one of the
+			// material itself, with no seed of the material consumed. The fifty-of-the-
+			// lower-tier recipe does not apply to them, and the acquisition graph has
+			// no promotion for them at all, so the Forge route was invisible.
+			static const int rareRows[][2] = {
+				{ 24295, 24294 }, // Vial of Powerful Blood from Vial of Potent Blood
+				{ 24357, 24356 }, // Vicious Fang from Large Fang
+				{ 24300, 24299 }, // Elaborate Totem from Intricate Totem
+				{ 24358, 24341 }, // Ancient Bone from Large Bone
+				{ 24289, 24288 }, // Armored Scale from Large Scale
+				{ 24351, 24350 }, // Vicious Claw from Large Claw
+				{ 24283, 24282 }  // Powerful Venom Sac from Potent Venom Sac
+			};
+			constexpr int kRareDust = 24277;    // Pile of Crystalline Dust
+			constexpr int kElonianWine = 19663; // Bottle of Elonian Wine
+			constexpr int kCrystal = 20799;     // Mystic Crystal
+			for (const auto& row : rareRows)
+			{
+				PromotionRecipe recipe;
+				recipe.ItemId = row[0];
+				recipe.Output = 1;
+				recipe.Ingredients.push_back({ row[1], 2 });
+				recipe.Ingredients.push_back({ kRareDust, 1 });
+				recipe.Ingredients.push_back({ kElonianWine, 1 });
+				recipe.Ingredients.push_back({ kCrystal, 1 });
 				result.push_back(std::move(recipe));
 			}
 			return result;

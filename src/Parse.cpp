@@ -90,11 +90,21 @@ namespace mc
 
 			// A merchant entry is a recipe whose only component is the currency the
 			// merchant charges, e.g. 10000 coin for an Icy Runestone or 2100 karma
-			// for an Obsidian Shard.
-			if (!node.MerchantName.empty() && node.Components.size() == 1 && node.Components.front().IsCurrency())
+			// for an Obsidian Shard. The provider leaves the merchant object out for
+			// items several vendors sell, so the discipline decides as well: without
+			// the currency the purchase had no price and the list showed it as 0c.
+			if (node.Components.size() == 1 && node.Components.front().IsCurrency())
 			{
-				node.MerchantCurrencyId = node.Components.front().Id;
-				node.MerchantCurrencyAmount = node.Components.front().Quantity;
+				bool merchant = !node.MerchantName.empty();
+				for (const auto& discipline : node.Disciplines)
+				{
+					merchant = merchant || discipline == "Merchant";
+				}
+				if (merchant)
+				{
+					node.MerchantCurrencyId = node.Components.front().Id;
+					node.MerchantCurrencyAmount = node.Components.front().Quantity;
+				}
 			}
 
 			return node;

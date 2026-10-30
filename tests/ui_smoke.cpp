@@ -373,7 +373,7 @@ int main()
 	}
 
 	const bool onlyMain = std::getenv("MC_UI_ONLY_MAIN") != nullptr;
-	for (int tab = 0; tab < 6; ++tab)
+	for (int tab = 0; tab < 7; ++tab)
 	{
 		app.ActiveTab = tab;
 		app.TabRequest = true;

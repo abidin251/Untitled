@@ -1373,6 +1373,106 @@ namespace
 		Check(crafted.Root.Children.size() == 1 && crafted.Root.Children[0].Source == SourceKind::Craft, "a promotion dearer than the recipe is not used");
 	}
 
+	// The provider leaves the merchant object out for items several vendors sell,
+	// so a merchant entry has to be recognised by its discipline and its single
+	// currency component: without that the purchase cost nothing and the shopping
+	// list showed 0c next to items that cost a thousand karma each.
+	void TestMerchantEntryWithoutName()
+	{
+		const std::string json = R"([
+			{ "id": 103038, "type": "Recipe", "quantity": 1, "output": 1,
+			  "components": [ { "id": 2, "type": "Currency", "quantity": 1050 } ],
+			  "disciplines": [ "Merchant" ], "merchant": null, "multipleRecipeCount": 2,
+			  "daily_purchase_cap": 3, "weekly_purchase_cap": 0 }
+		])";
+		RecipeNode honeycomb;
+		std::string error;
+		Check(ParseRecipeTree(json, honeycomb, error), "a merchant entry without a merchant object parses");
+		Check(honeycomb.MerchantCurrencyId == 2 && honeycomb.MerchantCurrencyAmount == 1050,
+			"a merchant entry without a name keeps the currency it charges");
+
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[103038].Id = 103038;
+		items[103038].Name = "Curious Lowland Honeycomb";
+
+		CurrencyDb currencies;
+		currencies[2].Id = 2;
+		currencies[2].Name = "Karma";
+
+		honeycomb.Quantity = 5;
+		RecipeNode goal;
+		goal.Id = 100;
+		goal.Type = "Recipe";
+		goal.Quantity = 1;
+		goal.Output = 1;
+		goal.Disciplines = { "Mystic Forge" };
+		goal.Components = { honeycomb };
+
+		const Plan plan = BuildPlan(goal, 1, items, PriceDb{}, currencies, {}, {}, {});
+		Check(plan.Shopping.size() == 1, "the honeycombs are on the shopping list");
+		if (plan.Shopping.size() == 1)
+		{
+			Check(plan.Shopping[0].PriceText == "1,050 Karma", "the entry is priced in the currency it costs");
+			Check(plan.Shopping[0].TotalPriceText == "5,250 Karma", "the total is the currency the batch costs");
+		}
+	}
+
+	// The rare material promotions are their own combine, not the fine one: two of
+	// the tier below, a pile of the tier's dust, a bottle of Elonian Wine and a
+	// Mystic Crystal turn into one of the material, with no seed consumed. The
+	// table used to carry the fifty-of-the-lower-material fine recipe for a few of
+	// them and nothing at all for the rest, so the Forge route was wrong or absent.
+	void TestRareMaterialPromotion()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[24295].Id = 24295;
+		items[24295].Name = "Vial of Powerful Blood";
+		items[24294].Id = 24294;
+		items[24294].Name = "Vial of Potent Blood";
+		items[24277].Id = 24277;
+		items[24277].Name = "Pile of Crystalline Dust";
+		items[19663].Id = 19663;
+		items[19663].Name = "Bottle of Elonian Wine";
+		items[20799].Id = 20799;
+		items[20799].Name = "Mystic Crystal";
+
+		PriceDb prices;
+		prices[24295].Id = 24295;
+		prices[24295].Sell = 2000;
+		prices[24294].Id = 24294;
+		prices[24294].Sell = 200;
+		prices[24277].Id = 24277;
+		prices[24277].Sell = 800;
+		prices[19663].Id = 19663;
+		prices[19663].Sell = 500;
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+
+		// Four bloods are four combines: eight potent bloods, four dusts and four
+		// wines come to 6800, cheaper than the 8000 listing, so the Forge is the
+		// route. The crystal is bought from the attendant with spirit shards and
+		// costs no coin.
+		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(24295, 4) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
+		Check(plan.Root.Children.size() == 1, "the blood is part of the plan");
+		if (plan.Root.Children.size() == 1)
+		{
+			const PlanNode& blood = plan.Root.Children[0];
+			Check(blood.Source == SourceKind::MysticForge, "the rare promotion is the route when it beats the listing");
+			Check(blood.Crafts == 4 && blood.TotalCost == 6800, "the rare promotion is charged for two lower materials, a dust and a wine");
+		}
+
+		// With a cheap enough listing the blood is bought, as any promotion is.
+		PriceDb cheap = prices;
+		cheap[24295].Sell = 100;
+		const Plan bought = BuildPlan(Recipe(100, 1, 1, { ItemNode(24295, 4) }, "Weaponsmith"), 1, items, cheap, {}, {}, options, {});
+		Check(bought.Root.Children.size() == 1 && bought.Root.Children[0].Source == SourceKind::TradingPost, "a rare promotion dearer than the listing is not used");
+	}
+
 	// Amalgamated Gemstone has one recipe per gemstone it can be made from, and the
 	// graph only sends one of them. The plan has to try the whole family (and the
 	// bulk combine that makes ten at a time) instead of believing the variant it
@@ -1577,6 +1677,8 @@ int main()
 	TestMaterialPromotionVersusTradingPost();
 	TestAccountBoundItemIgnoresTradingPostPrice();
 	TestFineMaterialPromotionRoute();
+	TestMerchantEntryWithoutName();
+	TestRareMaterialPromotion();
 	TestPromotionVersusRecipe();
 	TestChoiceRecipePicksCheapestGemstone();
 	TestGuildCommendationExclusion();

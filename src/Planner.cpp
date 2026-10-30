@@ -707,6 +707,19 @@ namespace mc
 				target.TotalCost += entry.TotalCost;
 			}
 
+			// A row merged from several plans carries the summed bill, so its unit
+			// price has to be derived from that bill rather than kept from whichever
+			// entry was seen first: an entry without a unit price otherwise left the
+			// merged row showing 0c next to a total of several gold.
+			for (auto& pair : aggregated)
+			{
+				ShoppingItem& row = pair.second;
+				if (row.PriceText.empty() && row.Quantity > 0 && row.TotalCost > 0)
+				{
+					row.UnitCost = row.TotalCost / row.Quantity;
+				}
+			}
+
 			std::vector<ShoppingItem> result;
 			result.reserve(aggregated.size());
 			for (auto& pair : aggregated)
