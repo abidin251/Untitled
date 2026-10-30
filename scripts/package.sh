@@ -2,11 +2,33 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-1.9.9}"
-DLL="${1:-$ROOT/build-win/MysticCrafting.dll}"
+VERSION="${VERSION:-1.9.10}"
+
+# The DLL to ship: the path given as the first argument, otherwise the newest
+# one any of the build scripts produced. A fixed path here once shipped an
+# ancient binary from a build directory that had not been touched in days, so
+# the newest build wins and a stale one is refused below.
+DLL="${1:-}"
+if [[ -z "$DLL" ]]; then
+	for candidate in "$ROOT/build-win-release/MysticCrafting.dll" "$ROOT/build-win/MysticCrafting.dll" "$ROOT/build/MysticCrafting.dll"; do
+		if [[ -f "$candidate" ]]; then
+			if [[ -z "$DLL" || "$candidate" -nt "$DLL" ]]; then
+				DLL="$candidate"
+			fi
+		fi
+	done
+fi
 
 if [[ ! -f "$DLL" ]]; then
-	echo "Missing $DLL. Build first with scripts/build-cross.sh or copy your release DLL here." >&2
+	echo "No MysticCrafting.dll found. Build one with scripts/build-dll.sh or scripts/build-cross.sh." >&2
+	exit 1
+fi
+
+# A DLL older than the sources cannot contain the current code.
+NEWEST_SOURCE="$(find "$ROOT/src" "$ROOT/CMakeLists.txt" -newer "$DLL" -type f -print -quit)"
+if [[ -n "$NEWEST_SOURCE" ]]; then
+	echo "Refusing to package a stale DLL: $DLL" >&2
+	echo "It is older than $NEWEST_SOURCE. Rebuild first." >&2
 	exit 1
 fi
 
