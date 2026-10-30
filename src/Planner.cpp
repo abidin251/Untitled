@@ -533,15 +533,28 @@ namespace mc
 					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / route.Output - 1e-9)))
 					: node.Remaining;
 
+				// A merchant's coin price is what the item costs, not what is left of
+				// that bill once the wallet has been counted against it: netting the
+				// wallet here turned 200 runestones at one gold each into 77g of
+				// purchases at a made-up 38s each. The coin the wallet covers is
+				// reported in the currency table instead, as the shortfall there.
+				const bool coinMerchant = KindForRecipe(route) == SourceKind::Vendor
+					&& route.MerchantCurrencyId == kCoinCurrency
+					&& route.MerchantCurrencyAmount > 0.0;
+				const i64 grossCoin = static_cast<i64>(route.MerchantCurrencyAmount * static_cast<double>(routeCrafts) + 0.5);
+
 				PlanContext candidate = aContext;
-				i64 candidateCost = 0;
+				i64 candidateCost = coinMerchant ? grossCoin : 0;
 				std::vector<PlanNode> candidateChildren;
 				for (const auto& component : route.Components)
 				{
 					RecipeNode scaled = component;
 					scaled.Quantity = component.Quantity * static_cast<double>(routeCrafts);
 					PlanNode child = BuildNode(candidate, scaled, aDepth + 1);
-					candidateCost += child.TotalCost;
+					if (!(coinMerchant && component.IsCurrency() && component.Id == kCoinCurrency))
+					{
+						candidateCost += child.TotalCost;
+					}
 					candidateChildren.push_back(std::move(child));
 				}
 

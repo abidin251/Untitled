@@ -1419,6 +1419,49 @@ namespace
 		}
 	}
 
+	// A merchant's coin price is a price, not the part of it the wallet does not
+	// cover. Deducting the wallet inside the recipe turned 200 Mystic Runestones
+	// at one gold each into the wallet's shortfall, so the list showed a made-up
+	// 38s 97c each next to a 77g total for the whole stack.
+	void TestMerchantCoinPriceIgnoresWallet()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[100].Name = "Gift";
+		items[79418].Id = 79418;
+		items[79418].Name = "Mystic Runestone";
+		items[79418].Tradable = false;
+
+		CurrencyDb currencies;
+		currencies[1].Id = 1;
+		currencies[1].Name = "Coin";
+
+		const RecipeNode runestone = MerchantRecipe(79418, 200, 1, 10000, "Miyani / Mystic Forge Attendant", "Mystic Forge");
+		const RecipeNode goal = Recipe(100, 1, 1, { runestone }, "Weaponsmith");
+
+		AccountData account;
+		account.Valid = true;
+		account.Currencies[1] = 1262838; // 126g 28s 38c in the wallet
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+		const Plan plan = BuildPlan(goal, 1, items, PriceDb{}, currencies, account, options, {});
+
+		Check(plan.Shopping.size() == 1, "the runestones are on the shopping list");
+		if (plan.Shopping.size() == 1)
+		{
+			Check(plan.Shopping[0].Quantity == 200, "the whole quantity is listed");
+			Check(plan.Shopping[0].UnitCost == 10000, "the runestone is listed at the gold the merchant charges");
+			Check(plan.Shopping[0].TotalCost == 2000000, "the total is the whole bill, not the wallet's shortfall");
+		}
+		Check(plan.Root.Children.size() == 1 && plan.Root.Children[0].UnitCost == 10000,
+			"the tree prices the purchase from the merchant as well");
+		Check(plan.RemainingCost == 2000000, "the remaining cost is the bill for what has to be bought");
+		auto shortfall = plan.CurrencyNeeded.find(1);
+		Check(shortfall != plan.CurrencyNeeded.end() && shortfall->second == 737162,
+			"the coin the wallet does not cover is still reported as the shortfall");
+	}
+
 	// The rare material promotions are their own combine, not the fine one: two of
 	// the tier below, a pile of the tier's dust, a bottle of Elonian Wine and a
 	// Mystic Crystal turn into one of the material, with no seed consumed. The
@@ -1678,6 +1721,7 @@ int main()
 	TestAccountBoundItemIgnoresTradingPostPrice();
 	TestFineMaterialPromotionRoute();
 	TestMerchantEntryWithoutName();
+	TestMerchantCoinPriceIgnoresWallet();
 	TestRareMaterialPromotion();
 	TestPromotionVersusRecipe();
 	TestChoiceRecipePicksCheapestGemstone();

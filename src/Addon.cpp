@@ -1244,7 +1244,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	g_Definition.Signature = kSignature;
 	g_Definition.APIVersion = NEXUS_API_VERSION;
 	g_Definition.Name = "Mystic Crafting";
-	g_Definition.Version = { 1, 9, 11, 0 };
+	g_Definition.Version = { 1, 9, 12, 0 };
 	g_Definition.Author = "Mystic Crafting Nexus port";
 	g_Definition.Description = "Legendary and item crafting planner with live prices and account synchronization.";
 	g_Definition.Load = AddonLoad;
