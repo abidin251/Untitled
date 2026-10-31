@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -32,6 +33,12 @@ namespace mc
 		mutable std::mutex Mutex;
 		ItemDb Items;
 		PriceDb Prices;
+		// Ids the market has no listing for. The prices endpoint answers 404
+		// "all ids provided are invalid" when a request holds nothing but
+		// untradable ids, which is normal for Forge materials such as the
+		// Philosopher's Stone or a Mystic Crystal: they are remembered so the
+		// addon does not ask for them again and report a failure that is not one.
+		std::set<int> UnpricedIds;
 		CurrencyDb Currencies;
 		AchievementDb Achievements;
 		AccountData Account;

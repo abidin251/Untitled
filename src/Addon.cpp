@@ -313,6 +313,12 @@ namespace mc
 			return true;
 		}
 
+		if (forced)
+		{
+			std::lock_guard<std::mutex> lock(Mutex);
+			UnpricedIds.clear();
+		}
+
 		// A global timestamp is not enough: a plan can reference items that were not
 		// part of the previous plan, so always fill gaps even while the cache is fresh.
 		std::vector<int> missing;
@@ -320,7 +326,7 @@ namespace mc
 			std::lock_guard<std::mutex> lock(Mutex);
 			for (int id : ids)
 			{
-				if (Prices.find(id) == Prices.end())
+				if (Prices.find(id) == Prices.end() && UnpricedIds.find(id) == UnpricedIds.end())
 				{
 					missing.push_back(id);
 				}
@@ -347,6 +353,21 @@ namespace mc
 			const HttpResponse response = GetGw2(path, {});
 			if (!response.Ok())
 			{
+				// The endpoint reports a chunk where not one id is tradable as a 404
+				// with "all ids provided are invalid". Forge materials have no Trading
+				// Post listing at all, so that is an answer rather than a failure: the
+				// chunk is remembered as unpriced and the plan simply costs those
+				// ingredients through the route that makes them.
+				if (response.Status == 404 && response.Body.find("all ids provided are invalid") != std::string::npos)
+				{
+					std::lock_guard<std::mutex> lock(Mutex);
+					for (std::size_t index = offset; index < offset + count; ++index)
+					{
+						UnpricedIds.insert(fetchIds[index]);
+					}
+					continue;
+				}
+
 				aError += response.Error + "; ";
 				success = false;
 				continue;
@@ -355,9 +376,21 @@ namespace mc
 			const auto parsed = ParsePrices(response.Body);
 			{
 				std::lock_guard<std::mutex> lock(Mutex);
+				std::set<int> priced;
 				for (const auto& price : parsed)
 				{
 					Prices[price.Id] = price;
+					priced.insert(price.Id);
+				}
+				// A partial answer lists only the ids the market carries, so the
+				// rest were asked about and answered: asking for them on the next
+				// plan would just repeat the same request.
+				for (std::size_t index = offset; index < offset + count; ++index)
+				{
+					if (priced.find(fetchIds[index]) == priced.end())
+					{
+						UnpricedIds.insert(fetchIds[index]);
+					}
 				}
 			}
 		}
