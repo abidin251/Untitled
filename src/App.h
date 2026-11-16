@@ -79,6 +79,11 @@ namespace mc
 		int StatusFilter = 0;
 		int SortKey = 0;
 		bool SortAscending = true;
+		// The shopping list sorts on its own: cheapest line last by default, which
+		// is the order the planner produces.
+		int ShoppingSortKey = 4;
+		bool ShoppingSortAscending = false;
+		std::string ShoppingSearch;
 		bool OnlyTracked = false;
 		bool ShowDebugData = false;
 

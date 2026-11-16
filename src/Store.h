@@ -12,7 +12,7 @@ namespace mc
 	{
 		std::string ApiKey;
 		bool PreferBuyingTradable = true;
-		bool BuyOrderPrices = false;
+		bool CheapestPrices = true;
 		bool IncludeAccountItems = true;
 		bool ShowCompleted = true;
 		bool CompactDensity = false;
@@ -25,6 +25,7 @@ namespace mc
 		bool CombineTracked = true;
 		bool IncludeResearchNotes = false;
 		bool ExcludeGuildCommendations = false;
+		bool IgnoreUnlistedCost = false;
 		int SelectedItem = 0;
 		std::string RecipeBase = "https://api.gw2efficiency.com";
 		std::vector<int> Tracked;

@@ -244,6 +244,13 @@ namespace mc
 			{
 				return aItem.PriceText;
 			}
+			// A line that costs no coin at all - an achievement reward, a container,
+			// an unpriced note - has no price to show: "0c" would read as a free
+			// purchase instead of as nothing to buy.
+			if (aItem.UnitCost == 0 && aItem.TotalCost == 0)
+			{
+				return "-";
+			}
 			// A row merged from several plans, or one whose unit price was never
 			// filled in, still knows what the batch costs: 0c next to a real total
 			// reads as a free purchase, so the unit is taken from the total.
@@ -256,7 +263,15 @@ namespace mc
 
 		std::string ShoppingTotalPrice(const ShoppingItem& aItem)
 		{
-			return aItem.TotalPriceText.empty() ? FormatCoins(aItem.TotalCost) : aItem.TotalPriceText;
+			if (!aItem.TotalPriceText.empty())
+			{
+				return aItem.TotalPriceText;
+			}
+			if (aItem.TotalCost == 0 && aItem.CurrencyId == 0)
+			{
+				return "-";
+			}
+			return FormatCoins(aItem.TotalCost);
 		}
 
 		// The shopping list and the crafting steps always describe the same target:
@@ -389,7 +404,24 @@ namespace mc
 			{
 				stream << "Combined tracked plans: " << aPlan.GoalCount << "\r\n";
 			}
-			stream << "Remaining cost: " << FormatCoins(aPlan.RemainingCost) << "\r\n\r\n";				for (const auto& entry : aPlan.Shopping)
+			stream << "Gold still to spend: " << FormatCoins(aPlan.RemainingCost) << "\r\n";
+			i64 tradingPostTotal = 0;
+			i64 merchantTotal = 0;
+			for (const auto& entry : aPlan.Shopping)
+			{
+				if (entry.Source == SourceKind::TradingPost)
+				{
+					tradingPostTotal += entry.TotalCost;
+				}
+				else if (entry.Source == SourceKind::Vendor)
+				{
+					merchantTotal += entry.TotalCost;
+				}
+			}
+			stream << "Trading Post: " << FormatCoins(tradingPostTotal) << "\r\n";
+			stream << "Merchants: " << FormatCoins(merchantTotal) << "\r\n";
+			stream << "Gold with nothing owned: " << FormatCoins(aPlan.FullCost) << "\r\n\r\n";
+			for (const auto& entry : aPlan.Shopping)
 				{
 					stream << entry.Quantity << " x " << entry.Name;
 					stream << " (" << ShoppingUnitPrice(entry) << " each) = " << ShoppingTotalPrice(entry);
@@ -409,11 +441,24 @@ namespace mc
 				stream << "\r\nCurrencies:\r\n";
 				for (const auto& pair : aPlan.CurrencyNeeded)
 				{
-					if (pair.second <= 0)
+					i64 missing = pair.second;
+					if (pair.first == kCoinCurrency)
+					{
+						// The same shortfall the currency table shows: the wallet comes
+						// off the plan's coin bill once, not off each purchase.
+						i64 owned = 0;
+						auto ownedIt = aPlan.CurrencyOwned.find(pair.first);
+						if (ownedIt != aPlan.CurrencyOwned.end())
+						{
+							owned = ownedIt->second;
+						}
+						missing = std::max<i64>(0, aPlan.RemainingCost - owned);
+					}
+					if (missing <= 0)
 					{
 						continue;
 					}
-					stream << pair.second << " " << CurrencyName(aCurrencies, pair.first) << "\r\n";
+					stream << missing << " " << CurrencyName(aCurrencies, pair.first) << "\r\n";
 				}
 			}
 
@@ -472,12 +517,16 @@ namespace mc
 
 		// A small label over its figure. The summary strips read as a dashboard
 		// rather than as one long sentence with numbers buried in it.
-		void Stat(const char* aLabel, const std::string& aValue, const ImVec4& aColor)
+		void Stat(const char* aLabel, const std::string& aValue, const ImVec4& aColor, const char* aTooltip = nullptr)
 		{
 			ImGui::BeginGroup();
 			ImGui::TextColored(ImVec4(0.52f, 0.56f, 0.62f, 1.0f), "%s", aLabel);
 			ImGui::TextColored(aColor, "%s", aValue.c_str());
 			ImGui::EndGroup();
+			if (aTooltip != nullptr && ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("%s", aTooltip);
+			}
 		}
 
 		void StatSeparator(float aSpacing = 18.0f)
@@ -486,6 +535,18 @@ namespace mc
 			ImGui::TextDisabled("|");
 			ImGui::SameLine(0, aSpacing);
 		}
+
+		// "Remaining" next to a currency column headed "Required" left it to the
+		// reader to work out which figure was the real total, so the summaries name
+		// the difference: one is the gold still left to pay, the other the price
+		// with nothing owned.
+		const char* const kStillToSpendTooltip =
+			"Gold the plan still has to pay: Trading Post purchases at the cheapest offer\n"
+			"plus merchant prices, after your own materials. The Trading Post and Merchants\n"
+			"figures next to it show where that gold goes; the coin in your wallet is not\n"
+			"subtracted here, the currency table shows that shortfall instead.";
+		const char* const kFullPriceTooltip =
+			"Every part of the plan paid for with nothing owned - the price from scratch.";
 
 		const ImVec4 kFocusColor(0.96f, 0.79f, 0.42f, 1.0f);
 		const ImVec4 kPlainColor(0.82f, 0.84f, 0.88f, 1.0f);
@@ -789,7 +850,14 @@ namespace mc
 				ImGui::TextColored(RarityColor(aNode.Rarity), "%s", aNode.Name.c_str());
 			}
 
-			if (aNode.Crafts > 1)
+			// A batch that hands over more than is needed says so, so the cost next to
+			// it is read as the price of the batch rather than of the used units.
+			if (aNode.Surplus > 0)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("(%dx, +%d spare)", aNode.Crafts, aNode.Surplus);
+			}
+			else if (aNode.Crafts > 1)
 			{
 				ImGui::SameLine();
 				ImGui::TextDisabled("(%dx)", aNode.Crafts);
@@ -932,9 +1000,9 @@ namespace mc
 			ImGui::ProgressBar(plan->Progress(), ImVec2(-1, 22.0f), progressText);
 
 			ImGui::Spacing();
-			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			Stat("Still to spend", FormatCoins(plan->RemainingCost), kFocusColor, kStillToSpendTooltip);
 			StatSeparator();
-			Stat("From scratch", FormatCoins(plan->FullCost), kPlainColor);
+			Stat("Full price", FormatCoins(plan->FullCost), kPlainColor, kFullPriceTooltip);
 			StatSeparator();
 			Stat("Nodes", std::to_string(plan->NodeCount), kPlainColor);
 			if (plan->Complete)
@@ -1038,10 +1106,15 @@ namespace mc
 			{
 				ImGui::TextColored(kPlainColor, "Shopping list for %s", plan->GoalName.c_str());
 			}
+			// The figures are summed from the lines the player actually buys, so the
+			// coins the plan charges are split into what goes to the Trading Post and
+			// what goes to merchants instead of one of them being a remainder.
 			int tradingPostLines = 0;
 			int merchantLines = 0;
-			int otherLines = 0;
+			int currencyLines = 0;
 			i64 tradingPostTotal = 0;
+			i64 merchantTotal = 0;
+			std::string currencyDetail;
 			for (const auto& entry : plan->Shopping)
 			{
 				if (entry.Source == SourceKind::TradingPost)
@@ -1052,55 +1125,148 @@ namespace mc
 				else if (entry.Source == SourceKind::Vendor)
 				{
 					++merchantLines;
+					merchantTotal += entry.TotalCost;
 				}
-				else
+				// A line a merchant hands over for karma, spirit shards or another
+				// currency costs no coin, so it is reported on its own rather than
+				// as a merchant purchase worth nothing.
+				if (!entry.Currency && !entry.PriceText.empty())
 				{
-					++otherLines;
+					++currencyLines;
+					if (!currencyDetail.empty())
+					{
+						currencyDetail += "\n";
+					}
+					currencyDetail += FormatNumber(entry.Quantity) + " x " + entry.Name + " - " +
+						(entry.TotalPriceText.empty() ? entry.PriceText : entry.TotalPriceText);
 				}
 			}
-
 			ImGui::Spacing();
-			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			Stat("Still to spend", FormatCoins(plan->RemainingCost), kFocusColor, kStillToSpendTooltip);
 			StatSeparator();
 			Stat("Trading Post", FormatCoins(tradingPostTotal) + "  (" + std::to_string(tradingPostLines) + ")", kPlainColor);
 			StatSeparator();
-			Stat("Merchants and other", FormatCoins(std::max<i64>(0, plan->RemainingCost - tradingPostTotal)) + "  (" + std::to_string(merchantLines + otherLines) + ")", kPlainColor);
-			if (plan->GoalCount > 1)
+			Stat("Merchants", FormatCoins(merchantTotal) + "  (" + std::to_string(merchantLines) + ")", kPlainColor);
+			if (currencyLines > 0)
 			{
 				StatSeparator();
-				Stat("From scratch", FormatCoins(plan->FullCost), kPlainColor);
+				Stat("Other currencies", FormatNumber(currencyLines) + (currencyLines == 1 ? " line" : " lines"), kPlainColor);
+				if (ImGui::IsItemHovered() && !currencyDetail.empty())
+				{
+					ImGui::SetTooltip("Paid without coins, so not counted in the totals above:\n%s", currencyDetail.c_str());
+				}
 			}
+			StatSeparator();
+			if (!aApp.Settings.IgnoreUnlistedCost && plan->UnlistedCost > 0)
+			{
+				StatSeparator();
+				Stat("Unlisted", FormatCoins(plan->UnlistedCost), kPlainColor);
+				if (ImGui::IsItemHovered())
+				{
+					ImGui::SetTooltip("Charged by the plan but not attributed to a shopping line.\n"
+						"Tick \"Leave unlisted coin out of the total\" in Settings to stop charging it.");
+				}
+			}
+			StatSeparator();
+			Stat("Full price", FormatCoins(plan->FullCost), kPlainColor, kFullPriceTooltip);
 			if (ImGui::Button("Copy list"))
 			{
 				CopyToClipboard(BuildShoppingText(*plan, aSnapshot.Currencies));
 				aApp.Notify("Shopping list copied to the clipboard.");
 			}
 
+			// A list of a hundred lines is hard to read in one order, so it can be
+			// narrowed by name or source and sorted by any column.
+			static char shopSearchBuffer[128] = {};
+			static std::string lastShopSearch;
+			if (lastShopSearch != aApp.ShoppingSearch)
+			{
+				std::snprintf(shopSearchBuffer, sizeof(shopSearchBuffer), "%s", aApp.ShoppingSearch.c_str());
+				lastShopSearch = aApp.ShoppingSearch;
+			}
+			ImGui::SetNextItemWidth(240.0f);
+			if (ImGui::InputTextWithHint("##mc_shop_search", "Filter the list...", shopSearchBuffer, sizeof(shopSearchBuffer)))
+			{
+				aApp.ShoppingSearch = ToLower(Trim(shopSearchBuffer));
+				lastShopSearch = aApp.ShoppingSearch;
+			}
+
+			std::vector<const ShoppingItem*> filteredRows;
+			for (const auto& entry : plan->Shopping)
+			{
+				if (!aApp.ShoppingSearch.empty())
+				{
+					const std::string haystack = ToLower(entry.Name) + " " + ToLower(ShoppingSourceCell(entry)) + " " +
+						ToLower(entry.SourceDetail);
+					if (haystack.find(aApp.ShoppingSearch) == std::string::npos)
+					{
+						continue;
+					}
+				}
+				filteredRows.push_back(&entry);
+			}
+
+			std::sort(filteredRows.begin(), filteredRows.end(), [&aApp](const ShoppingItem* a, const ShoppingItem* b) {
+				int result = 0;
+				switch (aApp.ShoppingSortKey)
+				{
+				case 1:
+					result = ShoppingSourceCell(*a).compare(ShoppingSourceCell(*b));
+					break;
+				case 2:
+					result = a->Quantity - b->Quantity;
+					break;
+				case 3:
+					result = a->UnitCost < b->UnitCost ? -1 : (a->UnitCost > b->UnitCost ? 1 : 0);
+					break;
+				case 4:
+					result = a->TotalCost < b->TotalCost ? -1 : (a->TotalCost > b->TotalCost ? 1 : 0);
+					break;
+				default:
+					result = a->Name.compare(b->Name);
+					break;
+				}
+				if (result == 0)
+				{
+					result = a->Name.compare(b->Name);
+				}
+				return aApp.ShoppingSortAscending ? result < 0 : result > 0;
+			});
+
+			ImGui::SameLine();
+			ImGui::TextDisabled("%d of %d lines", static_cast<int>(filteredRows.size()), static_cast<int>(plan->Shopping.size()));
+
 			const ImGuiTableFlags flags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-				ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
+				ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable;
 
 			const float tableHeight = ImGui::GetContentRegionAvail().y * 0.58f;
 			if (ImGui::BeginTable("##mc_shopping", 5, flags, ImVec2(0, tableHeight)))
 			{
-				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
-				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-				ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-				ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-				ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-				ImGui::TableSetColumnIndex(0);
-				ImGui::TableHeader("Item");
-				ImGui::TableSetColumnIndex(1);
-				ImGui::TableHeader("Source");
-				ImGui::TableSetColumnIndex(2);
-				ImGui::TableHeader("Quantity");
-				ImGui::TableSetColumnIndex(3);
-				ImGui::TableHeader("Unit price");
-				ImGui::TableSetColumnIndex(4);
-				ImGui::TableHeader("Total");
+				ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch, 0, 0);
+				ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthFixed, 190.0f, 1);
+				ImGui::TableSetupColumn("Quantity", ImGuiTableColumnFlags_WidthFixed, 80.0f, 2);
+				ImGui::TableSetupColumn("Unit price", ImGuiTableColumnFlags_WidthFixed, 110.0f, 3);
+				ImGui::TableSetupColumn(
+					"Total",
+					ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending,
+					110.0f,
+					4);
+				ImGui::TableSetupScrollFreeze(0, 1);
+				ImGui::TableHeadersRow();
 
-				for (const auto& entry : plan->Shopping)
+				if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs())
 				{
+					if (specs->SpecsDirty && specs->SpecsCount > 0)
+					{
+						aApp.ShoppingSortKey = static_cast<int>(specs->Specs[0].ColumnUserID);
+						aApp.ShoppingSortAscending = specs->Specs[0].SortDirection != ImGuiSortDirection_Descending;
+						specs->SpecsDirty = false;
+					}
+				}
+
+				for (const ShoppingItem* row : filteredRows)
+				{
+					const ShoppingItem& entry = *row;
 					ImGui::TableNextRow();
 
 					ImGui::TableSetColumnIndex(0);
@@ -1187,11 +1353,14 @@ namespace mc
 						rows[pair.first] = pair.second;
 					}
 				}
-				// Trading Post purchases are coin the player has to hold as well, so
-				// the Coin line carries them next to what merchants charge in coin.
-				if (tradingPostTotal > 0)
+				// The Coin line is the plan's coin bill itself, the same number as
+				// "Still to spend": rebuilding it here from merchant charges plus
+				// Trading Post rows let the two drift apart whenever a cost never
+				// reached the shopping list, and then "Required" disagreed with the
+				// total shown right above it.
+				if (plan->RemainingCost > 0)
 				{
-					rows[kCoinCurrency] += tradingPostTotal;
+					rows[kCoinCurrency] = plan->RemainingCost;
 				}
 				for (const auto& pair : rows)
 				{
@@ -1205,25 +1374,35 @@ namespace mc
 					{
 						continue;
 					}
-					i64 missing = 0;
-					auto missingIt = plan->CurrencyNeeded.find(pair.first);
-					if (missingIt != plan->CurrencyNeeded.end())
-					{
-						missing = missingIt->second;
-					}
-					if (pair.first == kCoinCurrency && tradingPostTotal > 0)
-					{
-						missing += tradingPostTotal;
-					}
 					i64 owned = 0;
 					auto ownedIt = plan->CurrencyOwned.find(pair.first);
 					if (ownedIt != plan->CurrencyOwned.end())
 					{
 						owned = ownedIt->second;
 					}
+					i64 missing = 0;
+					if (pair.first == kCoinCurrency)
+					{
+						// The wallet comes off the coin bill once, as a whole, so the
+						// shortfall cannot subtract the same gold twice.
+						missing = std::max<i64>(0, pair.second - owned);
+					}
+					else
+					{
+						auto missingIt = plan->CurrencyNeeded.find(pair.first);
+						if (missingIt != plan->CurrencyNeeded.end())
+						{
+							missing = missingIt->second;
+						}
+					}
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					ImGui::TextUnformatted(CurrencyName(aSnapshot.Currencies, pair.first).c_str());
+					if (pair.first == kCoinCurrency && ImGui::IsItemHovered())
+					{
+						ImGui::SetTooltip("The plan's coin bill: merchant prices, Trading Post purchases and anything else paid in gold.\n"
+							"Required is the same number as 'Still to spend' above, Owned is your wallet, and Missing is the part it does not cover.");
+					}
 					ImGui::TableSetColumnIndex(1);
 					TextRight(CurrencyText(aSnapshot.Currencies, pair.first, pair.second));
 					ImGui::TableSetColumnIndex(2);
@@ -1525,7 +1704,7 @@ namespace mc
 			StatSeparator();
 			Stat("Days of crafting", std::to_string(days), kPlainColor);
 			StatSeparator();
-			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			Stat("Still to spend", FormatCoins(plan->RemainingCost), kFocusColor, kStillToSpendTooltip);
 			ImGui::Spacing();
 
 			if (nothingToUnlock)
@@ -1586,7 +1765,7 @@ namespace mc
 			StatSeparator();
 			Stat("Step cost", FormatCoins(groupCost), kFocusColor);
 			StatSeparator();
-			Stat("Remaining", FormatCoins(plan->RemainingCost), kFocusColor);
+			Stat("Still to spend", FormatCoins(plan->RemainingCost), kFocusColor, kStillToSpendTooltip);
 			ImGui::Spacing();
 			ImGui::TextDisabled("Work top to bottom; each block is one place to go. Trading Post purchases are on the shopping list.");
 
@@ -1836,11 +2015,16 @@ namespace mc
 			ImGui::TextUnformatted("Planning");
 			bool changed = false;
 			changed |= ImGui::Checkbox("Prefer buying tradable components when cheaper", &aApp.Settings.PreferBuyingTradable);
-			changed |= ImGui::Checkbox("Use buy order prices instead of instant buy prices", &aApp.Settings.BuyOrderPrices);
+			changed |= ImGui::Checkbox("Use the cheapest Trading Post prices (buy orders)", &aApp.Settings.CheapestPrices);
 			changed |= ImGui::Checkbox("Subtract owned materials from the plan", &aApp.Settings.IncludeAccountItems);
 			changed |= ImGui::Checkbox("Show completed entries in the tree", &aApp.Settings.ShowCompleted);
 			changed |= ImGui::Checkbox("Compact display density", &aApp.Settings.CompactDensity);
 			changed |= ImGui::Checkbox("Exclude guild commendation purchases", &aApp.Settings.ExcludeGuildCommendations);
+			changed |= ImGui::Checkbox("Leave unlisted coin out of the total", &aApp.Settings.IgnoreUnlistedCost);
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Drops the gold the plan cannot attribute to a purchase from\nStill to spend and Full price, instead of charging it.");
+			}
 			if (changed)
 			{
 				aApp.SaveSettingsNow();

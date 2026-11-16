@@ -819,10 +819,11 @@ namespace mc
 
 		PlanOptions options;
 		options.PreferBuyingTradable = aSettings.PreferBuyingTradable;
-		options.BuyOrderPrices = aSettings.BuyOrderPrices;
+		options.CheapestPrices = aSettings.CheapestPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
 		options.ExcludeGuildCommendations = aSettings.ExcludeGuildCommendations;
+		options.IgnoreUnlistedCost = aSettings.IgnoreUnlistedCost;
 		if (hasResearchSources)
 		{
 			options.ResearchNoteSources = &researchSources;
@@ -887,10 +888,11 @@ namespace mc
 
 		PlanOptions options;
 		options.PreferBuyingTradable = aSettings.PreferBuyingTradable;
-		options.BuyOrderPrices = aSettings.BuyOrderPrices;
+		options.CheapestPrices = aSettings.CheapestPrices;
 		options.IncludeAccountItems = aSettings.IncludeAccountItems;
 		options.IncludeResearchNotes = aSettings.IncludeResearchNotes;
 		options.ExcludeGuildCommendations = aSettings.ExcludeGuildCommendations;
+		options.IgnoreUnlistedCost = aSettings.IgnoreUnlistedCost;
 		if (hasResearchSources)
 		{
 			options.ResearchNoteSources = &researchSources;

@@ -263,7 +263,7 @@ namespace mc
 			{
 				const json parsed = json::parse(contents);
 				aOut.PreferBuyingTradable = parsed.value("preferBuying", aOut.PreferBuyingTradable);
-				aOut.BuyOrderPrices = parsed.value("buyOrderPrices", aOut.BuyOrderPrices);
+				aOut.CheapestPrices = parsed.value("cheapestPrices", aOut.CheapestPrices);
 				aOut.IncludeAccountItems = parsed.value("includeAccount", aOut.IncludeAccountItems);
 				aOut.ShowCompleted = parsed.value("showCompleted", aOut.ShowCompleted);
 				aOut.CompactDensity = parsed.value("compact", aOut.CompactDensity);
@@ -276,6 +276,7 @@ namespace mc
 				aOut.CombineTracked = parsed.value("combineTracked", aOut.CombineTracked);
 				aOut.IncludeResearchNotes = parsed.value("includeResearchNotes", aOut.IncludeResearchNotes);
 				aOut.ExcludeGuildCommendations = parsed.value("excludeGuildCommendations", aOut.ExcludeGuildCommendations);
+				aOut.IgnoreUnlistedCost = parsed.value("ignoreUnlistedCost", aOut.IgnoreUnlistedCost);
 				aOut.SelectedItem = parsed.value("selectedItem", aOut.SelectedItem);
 				aOut.RecipeBase = parsed.value("recipeBase", aOut.RecipeBase);
 
@@ -320,7 +321,7 @@ namespace mc
 			json parsed;
 			parsed["apiKey"] = ProtectKey(aSettings.ApiKey);
 			parsed["preferBuying"] = aSettings.PreferBuyingTradable;
-			parsed["buyOrderPrices"] = aSettings.BuyOrderPrices;
+			parsed["cheapestPrices"] = aSettings.CheapestPrices;
 			parsed["includeAccount"] = aSettings.IncludeAccountItems;
 			parsed["showCompleted"] = aSettings.ShowCompleted;
 			parsed["compact"] = aSettings.CompactDensity;
@@ -333,6 +334,7 @@ namespace mc
 			parsed["combineTracked"] = aSettings.CombineTracked;
 			parsed["includeResearchNotes"] = aSettings.IncludeResearchNotes;
 			parsed["excludeGuildCommendations"] = aSettings.ExcludeGuildCommendations;
+			parsed["ignoreUnlistedCost"] = aSettings.IgnoreUnlistedCost;
 			parsed["selectedItem"] = aSettings.SelectedItem;
 			parsed["recipeBase"] = aSettings.RecipeBase;
 			parsed["tracked"] = aSettings.Tracked;

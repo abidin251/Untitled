@@ -13,13 +13,13 @@ This is a **clean-room port** of the Blish HUD [Mystic Crafting module](https://
 | Legendary catalog | 200+ legendary armory items, grouped by type, with search, type/ownership filters, tracked-only filter and sortable columns |
 | Acquisition tree | Recursive requirement tree for recipes, Mystic Forge combinations, merchants, achievements, containers and currencies |
 | Account sync | Material storage, bank, shared inventory, character bags, wallet and legendary armory (all optional) |
-| Costs | Live Trading Post prices (instant-buy or buy-order basis), vendor coin costs, Mystic Forge inputs and currency costs |
+| Costs | Live Trading Post prices (cheapest buy-order basis, or instant-buy listings), vendor coin costs, Mystic Forge inputs and currency costs |
 | Buy vs. craft | Automatically buys a tradable component when that is cheaper, with a per-item override (automatic / always craft / always buy) |
 | Crafting steps | Actions for the open plan or every tracked plan, dependency-ordered inside blocks that are grouped by where they happen: one block per merchant, crafting station, the Mystic Forge, the Trading Post or the wallet. Amounts, sources and combined block costs; clipboard export |
-| Shopping list | Aggregated purchases for one plan or every tracked plan with a source column: Trading Post, merchant ingredients (Icy Runestones, Mystic Runestones, Obsidian Shards, ...) and achievement ingredients, each at the cheapest available price, plus currency requirements and clipboard export |
+| Shopping list | Aggregated purchases for one plan or every tracked plan with a source column: Trading Post, merchant ingredients (Icy Runestones, Mystic Runestones, Obsidian Shards, ...) and achievement ingredients, each at the cheapest available price, with a filter, sortable columns and currency requirements, plus clipboard export |
 | Research notes | Optional costing of the research notes a plan still needs from the ingredients of the item you craft for them, including that craft's own shopping lines and steps, plus a per-note fallback price for when no source recipe is set |
 | Item details | Icons, rarity, type, description, vendor value, Trading Post prices and chat-link copying |
-| Progress | Remaining cost and "from scratch" cost with an owned-materials progress bar, and a summary strip of the plan's figures at the top of each tab; numeric columns line up under their headings |
+| Progress | "Still to spend" and the full price with nothing owned, plus an owned-materials progress bar, and a summary strip of the plan's figures at the top of each tab; numeric columns line up under their headings |
 | Workflow | Tracked plans, persisted settings, an API key encrypted with Windows DPAPI, manual refresh and disk caches |
 | Nexus integration | Main window, keybind, Quick Access shortcut, Escape-to-close, options page, alerts and logging |
 
@@ -108,10 +108,10 @@ The tests do not run Nexus or the game. See **Verification** below.
 
 ### Price basis
 
-- **Instant buy** (default) uses the lowest sell listing — what you pay to buy now.
-- **Buy order** uses the highest buy order — what a buy order costs, assuming it fills.
+- **Cheapest** (default) uses the highest buy order, falling back to the lowest sell listing when nobody is bidding — the least gold the item can cost on the Trading Post.
+- **Instant buy** uses the lowest sell listing only — what you pay to buy right now, which is usually dearer than a buy order that waits.
 
-The planner compares the buy cost against the full craft cost of the remaining quantity. Crafting uses the same account ownership, vendor and currency rules as the tree.
+Turn the cheapest basis off in Settings to price everything at instant-buy listings. The planner compares the buy cost against the full craft cost of the remaining quantity. Crafting uses the same account ownership, vendor and currency rules as the tree.
 
 ## Data sources and caching
 

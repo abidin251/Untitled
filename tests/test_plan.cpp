@@ -1286,17 +1286,17 @@ namespace
 		PlanOptions options;
 		options.PreferBuyingTradable = false;
 
-		// Orichalcum ore promotes ten at a time, but the combine eats the seed it
-		// was given, so one craft nets nine: ten ore is two crafts of 250 mithril
-		// ore, a seed at its listing and five dusts, which beats the 1 gold
-		// listing. The stones cost spirit shards rather than coin.
+		// Orichalcum ore promotes about nineteen at a time, but the combine eats
+		// the seed it was given, so one craft nets about eighteen: ten ore is a
+		// single craft of 250 mithril ore, a seed at its listing and five dusts,
+		// which beats the 1 gold listing. The stones cost spirit shards, not coin.
 		const Plan plan = BuildPlan(Recipe(100, 1, 1, { ItemNode(19701, 10) }, "Weaponsmith"), 1, items, prices, {}, {}, options, {});
 		Check(plan.Root.Children.size() == 1, "the ore is part of the plan");
 		if (plan.Root.Children.size() == 1)
 		{
 			const PlanNode& ore = plan.Root.Children[0];
 			Check(ore.Source == SourceKind::MysticForge, "a promotion cheaper than the listing is the route the plan takes");
-			Check(ore.Crafts == 2 && ore.TotalCost == 26000, "the promotion is charged for the materials it consumes");
+			Check(ore.Crafts == 1 && ore.TotalCost == 13000, "the promotion is charged for the materials it consumes");
 			// The seed the combine consumes is bought: promoting it again would
 			// recurse one item at a time and never reach a price.
 			bool seedBought = false;
@@ -1304,12 +1304,12 @@ namespace
 			{
 				if (child.Id == 19701)
 				{
-					seedBought = child.Source == SourceKind::TradingPost && child.Children.empty() && child.TotalCost == 20000;
+					seedBought = child.Source == SourceKind::TradingPost && child.Children.empty() && child.TotalCost == 10000;
 				}
 			}
 			Check(seedBought, "the seed of the promoted material is bought rather than promoted again");
 		}
-		Check(plan.RemainingCost == 26000, "the plan charges the promotion instead of the listing");
+		Check(plan.RemainingCost == 13000, "the plan charges the promotion instead of the listing");
 
 		// With a cheap enough listing the ore is bought instead.
 		PriceDb cheap = prices;
@@ -1469,6 +1469,62 @@ namespace
 		}
 	}
 
+	// Two tracked plans that each buy the same karma item are one row, and that row
+	// has to be priced for the merged quantity: keeping the total of the first plan
+	// showed 5,250 karma next to a batch of ten honeycombs.
+	void TestMergedCurrencyPriceTotal()
+	{
+		ItemDb items;
+		items[100].Id = 100;
+		items[103038].Id = 103038;
+		items[103038].Name = "Curious Lowland Honeycomb";
+
+		CurrencyDb currencies;
+		currencies[2].Id = 2;
+		currencies[2].Name = "Karma";
+
+		const RecipeNode honeycomb = MerchantRecipe(103038, 1, 2, 1050, "Karma Merchant", "Lowland Shore");
+		RecipeNode goal = Recipe(100, 1, 1, { honeycomb }, "Chef");
+		RecipeNode second = Recipe(100, 1, 1, { honeycomb }, "Chef");
+		second.Components[0].Quantity = 2;
+
+		const Plan combined = BuildCombinedPlan({ goal, second }, items, {}, currencies, {}, {}, {});
+		Check(combined.Shopping.size() == 1, "the shared karma purchase is one shopping line");
+		if (combined.Shopping.size() == 1)
+		{
+			Check(combined.Shopping[0].Quantity == 3, "the merged line carries both plans' quantities");
+			Check(combined.Shopping[0].PriceText == "1,050 Karma", "the unit price stays the merchant's price");
+			Check(combined.Shopping[0].TotalPriceText == "3,150 Karma", "the merged line is priced for the merged quantity");
+		}
+	}
+
+	// A batch that hands over more than the plan needs reports the extra, so the
+	// cost next to it reads as the price of the batch rather than of the used units.
+	void TestBatchSurplus()
+	{
+		ItemDb items;
+		items[1].Id = 1;
+		items[1].Name = "Ore";
+		items[100].Id = 100;
+		items[100].Name = "Ingot";
+
+		PriceDb prices;
+		prices[1].Sell = 100;
+
+		const RecipeNode root = Recipe(100, 1, 10, { ItemNode(1, 10) }, "Armorsmith");
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+		const Plan plan = BuildPlan(root, 3, items, prices, {}, {}, options, {});
+
+		Check(plan.Root.Crafts == 1, "one batch covers the three ingots");
+		Check(plan.Root.Surplus == 7, "the batch reports the seven ingots it leaves spare");
+		Check(plan.RemainingCost == 1000, "the batch is charged as a whole");
+
+		const RecipeNode exact = Recipe(100, 1, 10, { ItemNode(1, 10) }, "Armorsmith");
+		const Plan exactPlan = BuildPlan(exact, 10, items, prices, {}, {}, options, {});
+		Check(exactPlan.Root.Surplus == 0, "a batch that is used up reports no surplus");
+	}
+
 	// A merchant's coin price is a price, not the part of it the wallet does not
 	// cover. Deducting the wallet inside the recipe turned 200 Mystic Runestones
 	// at one gold each into the wallet's shortfall, so the list showed a made-up
@@ -1517,6 +1573,144 @@ namespace
 	// a Mystic Crystal turn into one of the material, with no seed consumed. The
 	// acquisition graph has no promotion for these families at all, so without a
 	// row here a Charged Lodestone could only ever be bought.
+	// A weekly hand-in paid in items rather than a currency - the discounted Janthir
+	// shards, for instance - is not a coin purchase. Its ingredients carry the bill,
+	// so the hand-in line must not charge that same bill a second time.
+	void TestVendorHandInDoesNotDoubleCount()
+	{
+		ItemDb items;
+		items[500].Id = 500;
+		items[500].Name = "Discounted Shard";
+		items[501].Id = 501;
+		items[501].Name = "Amalgamated Gemstone";
+		items[502].Id = 502;
+		items[502].Name = "Maguuma Burl";
+
+		PriceDb prices;
+		prices[502].Id = 502;
+		prices[502].Buy = 100;
+		prices[502].Sell = 120;
+
+		// The shard is handed in for gemstones, and the gemstones are crafted from
+		// burls, so nothing in between is bought from the Trading Post.
+		const RecipeNode gemstone = Recipe(501, 100, 1, { ItemNode(502, 2) }, "Jeweler");
+
+		RecipeNode handIn;
+		handIn.Id = 500;
+		handIn.Type = "Recipe";
+		handIn.Quantity = 1;
+		handIn.Output = 1;
+		handIn.Disciplines = { "Merchant" };
+		handIn.WeeklyCap = 21;
+		handIn.Components = { gemstone };
+
+		PlanOptions options;
+		options.PreferBuyingTradable = false;
+		const Plan plan = BuildPlan(handIn, 1, items, prices, {}, {}, options, {});
+
+		Check(plan.RemainingCost == 20000, "the hand-in is charged through its ingredients");
+
+		bool found = false;
+		i64 handInTotal = 0;
+		for (const auto& row : plan.Shopping)
+		{
+			if (row.Id == 500)
+			{
+				found = true;
+				handInTotal += row.TotalCost;
+			}
+		}
+		Check(found, "the hand-in is still on the shopping list");
+		Check(handInTotal == 0, "the hand-in line carries no coin of its own");
+
+		i64 listed = 0;
+		for (const auto& row : plan.Shopping)
+		{
+			listed += row.TotalCost;
+		}
+		Check(listed == plan.RemainingCost, "the shopping lines add up to the plan bill");
+	}
+
+	// A merchant that charges coin and items together: the line carries the coin,
+	// the items keep their own lines, and the two add up to the plan's bill. Before
+	// this the line carried the items too (or vanished with them), which left gold
+	// between the bill and the shopping list.
+	void TestMerchantCoinAndItemsSumToBill()
+	{
+		ItemDb items;
+		items[600].Id = 600;
+		items[600].Name = "Bundle";
+		items[601].Id = 601;
+		items[601].Name = "Trinket";
+
+		PriceDb prices;
+		prices[601].Id = 601;
+		prices[601].Buy = 1000;
+		prices[601].Sell = 1200;
+
+		RecipeNode coin;
+		coin.Id = 1;
+		coin.Type = "Currency";
+		coin.Quantity = 5000;
+
+		RecipeNode bundle;
+		bundle.Id = 600;
+		bundle.Type = "Recipe";
+		bundle.Quantity = 1;
+		bundle.Output = 1;
+		bundle.Disciplines = { "Merchant" };
+		bundle.MerchantCurrencyId = 1;
+		bundle.MerchantCurrencyAmount = 5000;
+		bundle.Components = { coin, ItemNode(601, 1) };
+
+		PlanOptions options;
+		const Plan plan = BuildPlan(bundle, 1, items, prices, {}, {}, options, {});
+
+		Check(plan.RemainingCost == 6000, "the bill is the coin plus the item");
+
+		i64 listed = 0;
+		i64 bundleLine = 0;
+		for (const auto& row : plan.Shopping)
+		{
+			listed += row.TotalCost;
+			if (row.Id == 600)
+			{
+				bundleLine += row.TotalCost;
+			}
+		}
+		Check(bundleLine == 5000, "the merchant line carries only the coin it charges");
+		Check(listed == plan.RemainingCost, "the shopping lines add up to the bill");
+		Check(plan.UnlistedCost == 0, "nothing is left unaccounted for");
+	}
+
+	// The Trading Post has two prices: a buy order costs the highest current bid,
+	// an instant buy costs the cheapest listing. A plan quoting the cheapest route
+	// uses the buy order, and still falls back to the listing when nobody bids.
+	void TestCheapestTradingPostPrice()
+	{
+		ItemDb items;
+		items[7].Id = 7;
+		items[7].Name = "Ore";
+
+		PriceDb prices;
+		prices[7].Id = 7;
+		prices[7].Buy = 100;   // 1 silver bid
+		prices[7].Sell = 250;  // 2.5 silver listing
+
+		const RecipeNode root = ItemNode(7, 1);
+		const Plan cheapest = BuildPlan(root, 1, items, prices, {}, {}, PlanOptions{}, {});
+		Check(cheapest.RemainingCost == 100, "the cheaper buy order price is used by default");
+
+		PlanOptions instantOptions;
+		instantOptions.CheapestPrices = false;
+		const Plan instant = BuildPlan(root, 1, items, prices, {}, {}, instantOptions, {});
+		Check(instant.RemainingCost == 250, "instant buy prices can still be asked for");
+
+		prices[7].Buy = 0;
+		const Plan noOrders = BuildPlan(root, 1, items, prices, {}, {}, PlanOptions{}, {});
+		Check(noOrders.RemainingCost == 250, "an item with no buy orders falls back to the instant buy price");
+	}
+
 	void TestRareMaterialPromotion()
 	{
 		ItemDb items;
@@ -1601,9 +1795,11 @@ namespace
 				"every tier-6 material has its fifty-of-the-tier-below promotion");
 		}
 
-		// A fine material of the tighest tier still has its dust and its stones.
+		// A fine material of the tighest tier still has its dust and its stones,
+		// and is worth the average the wiki measured for the combine rather than
+		// the five its lowest roll returns.
 		const PromotionRecipe* bone = FindPromotion(24358);
-		Check(bone != nullptr && bone->Output == 5 && bone->Ingredients.size() == 4
+		Check(bone != nullptr && bone->Output == 6.91 && bone->Ingredients.size() == 4
 			&& bone->Ingredients[0].ItemId == 24341 && bone->Ingredients[1].ItemId == 24358
 			&& bone->Ingredients[2].ItemId == 24277 && bone->Ingredients[3].ItemId == 20796,
 			"Ancient Bone is fifty Large Bones, a seed, five dusts and five stones");
@@ -1885,7 +2081,12 @@ int main()
 	TestFineMaterialPromotionRoute();
 	TestPromotionWithFreeIngredients();
 	TestMerchantEntryWithoutName();
+	TestMergedCurrencyPriceTotal();
+	TestBatchSurplus();
 	TestMerchantCoinPriceIgnoresWallet();
+	TestCheapestTradingPostPrice();
+	TestVendorHandInDoesNotDoubleCount();
+	TestMerchantCoinAndItemsSumToBill();
 	TestRareMaterialPromotion();
 	TestPromotionTableCoversEveryMaterial();
 	TestPromotionVersusRecipe();

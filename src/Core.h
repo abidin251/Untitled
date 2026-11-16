@@ -56,7 +56,11 @@ namespace mc
 	struct PromotionRecipe
 	{
 		int ItemId = 0;   // the promoted material
-		int Output = 1;   // how many one combine returns
+		// How many one combine returns on average. The Forge hands out a random
+		// amount inside a range, so the figure is the measured mean of that range
+		// rather than its lowest roll: pricing the minimum made every promotion
+		// look dearer than the listing it competes with.
+		double Output = 1.0;
 		std::vector<PromotionIngredient> Ingredients;
 	};
 
@@ -194,13 +198,18 @@ namespace mc
 	struct PlanOptions
 	{
 		bool PreferBuyingTradable = true;
-		bool BuyOrderPrices = false;
+		// Price a material at the cheapest offer on the Trading Post: the highest
+		// buy order, falling back to the instant buy listing when nobody bids.
+		bool CheapestPrices = true;
 		bool IncludeAccountItems = true;
 		bool ShowCompleted = true;
 		bool IncludeResearchNotes = false;   // price the research notes a plan needs
 		// Leave guild commendation purchases out of the plan instead of counting
 		// them, for players who do not want to spend the commendations.
 		bool ExcludeGuildCommendations = false;
+		// Leave the coin no shopping line accounts for out of the plan's totals,
+		// so nothing unexplained is charged.
+		bool IgnoreUnlistedCost = false;
 		// Crafted items whose craft can be turned into research notes; the plan
 		// prices each of them and charges the cheapest one per note.
 		const std::vector<RecipeNode>* ResearchNoteSources = nullptr;
@@ -221,6 +230,11 @@ namespace mc
 		std::string SourceDetail;     // merchant, achievement or acquisition note
 		std::string PriceText;        // per unit price in a non-coin currency, e.g. "2,100 Karma"
 		std::string TotalPriceText;   // the same price for the whole quantity
+		// What the non-coin price is made of, so a row merged from several plans
+		// can be repriced for the merged quantity instead of keeping the total of
+		// whichever plan happened to be listed first.
+		int CurrencyId = 0;
+		i64 CurrencyUnit = 0;
 		bool FromVendor = false;      // a merchant sells it
 		bool FromTradingPost = false; // the Trading Post sells it
 		bool ResearchNotes = false;   // a line that exists to produce research notes
@@ -246,6 +260,10 @@ namespace mc
 		std::string Discipline;
 		i64 UnitCost = 0;
 		i64 TotalCost = 0;
+		// Units a batch hands over beyond what the plan needs: a Forge combine that
+		// returns ten for the three required leaves seven spare, and the cost shown
+		// is what the whole batch costs, not what the three used ones cost.
+		int Surplus = 0;
 		bool Complete = false;
 		bool Tradable = false;
 		bool Purchasable = false;
@@ -303,6 +321,8 @@ namespace mc
 		PlanNode Root;
 		i64 RemainingCost = 0;
 		i64 FullCost = 0;
+		// Coin the plan charges that none of its shopping lines account for.
+		i64 UnlistedCost = 0;
 		std::vector<ShoppingItem> Shopping;
 		std::map<int, i64> CurrencyRequired; // total amount the plan asks for
 		std::map<int, i64> CurrencyNeeded;   // amount still missing after the wallet

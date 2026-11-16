@@ -39,6 +39,11 @@ namespace mc
 			std::vector<TimeGatedNeed> TimeGatedNeeds;
 		};
 
+		// The cheapest coin price the Trading Post offers for an item. A buy order
+		// costs the highest current bid, which is never above the cheapest listing
+		// and is what a planner quoting the cheapest route is asking about; the
+		// instant buy listing is used only when nobody is bidding at all, so an
+		// item with no orders is not mistaken for one that cannot be bought.
 		i64 UnitPrice(const PlanContext& aContext, int aItemId)
 		{
 			auto it = aContext.Prices.find(aItemId);
@@ -46,7 +51,13 @@ namespace mc
 			{
 				return 0;
 			}
-			return aContext.Options.BuyOrderPrices ? it->second.Buy : it->second.Sell;
+			const i64 buyOrder = it->second.Buy;
+			const i64 instantBuy = it->second.Sell;
+			if (aContext.Options.CheapestPrices && buyOrder > 0 && (instantBuy <= 0 || buyOrder < instantBuy))
+			{
+				return buyOrder;
+			}
+			return instantBuy > 0 ? instantBuy : buyOrder;
 		}
 
 		// An item the API marks as account bound can never be bought on the Trading
@@ -131,10 +142,10 @@ namespace mc
 			return label;
 		}
 
-		std::string CurrencyPriceText(const PlanContext& aContext, int aCurrencyId, i64 aAmount)
+		std::string CurrencyPriceText(const CurrencyDb& aCurrencies, int aCurrencyId, i64 aAmount)
 		{
-			auto it = aContext.Currencies.find(aCurrencyId);
-			const std::string name = it != aContext.Currencies.end() && !it->second.Name.empty()
+			auto it = aCurrencies.find(aCurrencyId);
+			const std::string name = it != aCurrencies.end() && !it->second.Name.empty()
 				? it->second.Name
 				: "Currency #" + std::to_string(aCurrencyId);
 			return FormatNumber(aAmount) + " " + name;
@@ -168,14 +179,40 @@ namespace mc
 		// currency the merchant asks for (karma, laurels, ...).
 		void AddVendorRow(PlanContext& aContext, const PlanNode& aNode, const RecipeNode& aRecipe)
 		{
+			// A merchant entry paid in items rather than a currency - a weekly hand-in
+			// like the discounted Janthir shards, whose price is a recipe and a pile of
+			// Amalgamated Gemstones - is not a coin purchase. Its ingredients already
+			// carry the cost, so charging the node's own bill here as well listed the
+			// same gold twice: once on the hand-in and again on what it is made of.
+			const bool exchange = aRecipe.MerchantCurrencyId == 0;
+			// The line carries what the merchant charges in coin, not what the plan
+			// spends on the items handed over with it: those have lines of their own,
+			// so folding them in here listed the same gold twice.
+			i64 ownCoin = aNode.TotalCost;
+			if (aRecipe.MerchantCurrencyId == kCoinCurrency && !aNode.Children.empty())
+			{
+				for (const auto& child : aNode.Children)
+				{
+					if (!child.IsCurrency)
+					{
+						ownCoin -= child.TotalCost;
+					}
+				}
+				ownCoin = std::max<i64>(0, ownCoin);
+			}
 			AddShoppingRow(
 				aContext,
 				aNode,
 				SourceKind::Vendor,
-				aNode.Remaining > 0 ? aNode.TotalCost / aNode.Remaining : 0,
-				aNode.TotalCost,
+				exchange || aNode.Remaining <= 0 ? 0 : ownCoin / aNode.Remaining,
+				exchange ? 0 : ownCoin,
 				true,
 				aNode.Tradable);
+
+			if (exchange)
+			{
+				aContext.Shopping.back().SourceDetail += " - hand in the ingredients it is made of";
+			}
 
 			// The merchant won, but the item can still be bought with gold, so the
 			// shopping line reports the alternative price next to the chosen one.
@@ -197,8 +234,10 @@ namespace mc
 			ShoppingItem& row = aContext.Shopping.back();
 			row.UnitCost = 0;
 			row.TotalCost = 0;
-			row.PriceText = CurrencyPriceText(aContext, aRecipe.MerchantCurrencyId, static_cast<i64>(aRecipe.MerchantCurrencyAmount + 0.5));
-			row.TotalPriceText = CurrencyPriceText(aContext, aRecipe.MerchantCurrencyId, static_cast<i64>(aRecipe.MerchantCurrencyAmount * aNode.Remaining + 0.5));
+			row.CurrencyId = aRecipe.MerchantCurrencyId;
+			row.CurrencyUnit = static_cast<i64>(aRecipe.MerchantCurrencyAmount + 0.5);
+			row.PriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit);
+			row.TotalPriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit * aNode.Remaining);
 		}
 
 		void FillItemMetadata(PlanContext& aContext, PlanNode& aNode, int aItemId)
@@ -549,8 +588,10 @@ namespace mc
 				AddShoppingRow(aContext, node, SourceKind::Vendor, 0, 0, true, false);
 				ShoppingItem& row = aContext.Shopping.back();
 				row.SourceDetail = "Guild Commendations excluded from the plan";
-				row.PriceText = CurrencyPriceText(aContext, kGuildCommendationCurrency, static_cast<i64>(aNode.MerchantCurrencyAmount + 0.5));
-				row.TotalPriceText = CurrencyPriceText(aContext, kGuildCommendationCurrency, static_cast<i64>(aNode.MerchantCurrencyAmount * node.Remaining + 0.5));
+				row.CurrencyId = kGuildCommendationCurrency;
+				row.CurrencyUnit = static_cast<i64>(aNode.MerchantCurrencyAmount + 0.5);
+				row.PriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit);
+				row.TotalPriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit * node.Remaining);
 				return node;
 			}
 
@@ -683,6 +724,14 @@ namespace mc
 					node.TotalCost = craftCost;
 					node.UnitCost = node.Remaining > 0 ? craftCost / node.Remaining : 0;
 					node.Crafts = crafts;
+					// A batch that hands over more than the plan needs: the cost covers
+					// the whole batch, so the extra is reported rather than quietly
+					// folded into the price of the units that are used.
+					const double produced = static_cast<double>(crafts) * recipe.Output;
+					if (produced > static_cast<double>(node.Remaining) + 1e-9)
+					{
+						node.Surplus = static_cast<int>(std::lround(produced - static_cast<double>(node.Remaining)));
+					}
 					if (node.Source == SourceKind::Vendor)
 					{
 						node.MerchantDetail = MerchantLabel(recipe);
@@ -738,12 +787,16 @@ namespace mc
 			return node;
 		}
 
-		std::vector<ShoppingItem> AggregateShopping(const std::vector<ShoppingItem>& aEntries)
+		std::vector<ShoppingItem> AggregateShopping(const std::vector<ShoppingItem>& aEntries, const CurrencyDb& aCurrencies)
 		{
-			std::map<int, ShoppingItem> aggregated;
+			// A row is keyed by item and price currency: the same honeycomb bought
+			// with karma in one plan and with coin in another is two purchases at two
+			// prices, so merging the two would show one of the prices against the
+			// combined quantity.
+			std::map<std::pair<int, int>, ShoppingItem> aggregated;
 			for (const auto& entry : aEntries)
 			{
-				auto& target = aggregated[entry.Id];
+				auto& target = aggregated[{ entry.Id, entry.CurrencyId }];
 				if (target.Id == 0)
 				{
 					target = entry;
@@ -761,7 +814,17 @@ namespace mc
 			for (auto& pair : aggregated)
 			{
 				ShoppingItem& row = pair.second;
-				if (row.PriceText.empty() && row.Quantity > 0 && row.TotalCost > 0)
+				if (row.CurrencyId != 0 && row.CurrencyUnit > 0 && row.Quantity > 0)
+				{
+					// The merged quantity is what the batch costs, so the shown total is
+					// the unit price times that quantity rather than the total of the
+					// first plan that listed the row.
+					row.UnitCost = 0;
+					row.TotalCost = 0;
+					row.PriceText = CurrencyPriceText(aCurrencies, row.CurrencyId, row.CurrencyUnit);
+					row.TotalPriceText = CurrencyPriceText(aCurrencies, row.CurrencyId, row.CurrencyUnit * row.Quantity);
+				}
+				else if (row.PriceText.empty() && row.Quantity > 0 && row.TotalCost > 0)
 				{
 					row.UnitCost = row.TotalCost / row.Quantity;
 				}
@@ -843,11 +906,16 @@ namespace mc
 			if (covered.empty())
 			{
 				return;
-			}				aPlan.Shopping.erase(
-					std::remove_if(aPlan.Shopping.begin(), aPlan.Shopping.end(), [&covered](const ShoppingItem& aRow) {
-						return !aRow.Currency && covered.count(aRow.Id) > 0;
-					}),
-					aPlan.Shopping.end());
+			}
+			// Only a line that costs no coin can be dropped: the ingredients it is
+			// made of then account for everything, so nothing leaves the list. A
+			// purchase that does cost coin stays, because the plan still charges it
+			// - erasing it by item id hid that gold between the bill and the lines.
+			aPlan.Shopping.erase(
+				std::remove_if(aPlan.Shopping.begin(), aPlan.Shopping.end(), [&covered](const ShoppingItem& aRow) {
+					return !aRow.Currency && aRow.TotalCost == 0 && covered.count(aRow.Id) > 0;
+				}),
+				aPlan.Shopping.end());
 		}
 
 		// The same achievement item needed twice is one warning carrying the total.
@@ -1160,11 +1228,27 @@ namespace mc
 			plan.FullCost = plan.RemainingCost;
 		}
 
-		plan.Shopping = AggregateShopping(context.Shopping);
+		plan.Shopping = AggregateShopping(context.Shopping, aCurrencies);
 		// Research note lines are appended after aggregation so their own cost
 		// lines never merge with the ingredient they happen to share an id with.
 		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullNotesRequired);
 		DropRowsWithListedIngredients(plan);
+
+		// Coin the plan charges that none of its lines account for. It is reported
+		// so the interface can name it, and optionally left out of the totals so a
+		// bill nobody can point at a purchase for is not charged.
+		i64 listedCost = 0;
+		for (const auto& row : plan.Shopping)
+		{
+			listedCost += row.TotalCost;
+		}
+		plan.UnlistedCost = std::max<i64>(0, plan.RemainingCost - listedCost);
+		if (aOptions.IgnoreUnlistedCost && plan.UnlistedCost > 0)
+		{
+			plan.RemainingCost = std::max<i64>(0, plan.RemainingCost - plan.UnlistedCost);
+			plan.FullCost = std::max<i64>(0, plan.FullCost - plan.UnlistedCost);
+			plan.Complete = plan.RemainingCost == 0;
+		}
 
 		return plan;
 	}
@@ -1776,12 +1860,14 @@ namespace mc
 		std::vector<AchievementNeed> achievementNeeds;
 		std::vector<TimeGatedNeed> timeGatedNeeds;
 		std::vector<std::string> names;
+		i64 unlistedCost = 0;
 
 		for (const auto& root : aRoots)
 		{
 			const Plan plan = BuildPlan(root, 1, aItems, aPrices, aCurrencies, pool, aOptions, aPreferences);
 			combined.RemainingCost += plan.RemainingCost;
 			combined.FullCost += plan.FullCost;
+			unlistedCost += plan.UnlistedCost;
 			combined.NodeCount += plan.NodeCount;
 			combined.ResearchNotesRequired += plan.ResearchNotesRequired;
 			combined.ResearchNotesNeeded += plan.ResearchNotesNeeded;
@@ -1841,7 +1927,8 @@ namespace mc
 			consume(plan.Root);
 		}
 
-		combined.Shopping = AggregateShopping(entries);
+		combined.UnlistedCost = unlistedCost;
+		combined.Shopping = AggregateShopping(entries, aCurrencies);
 		combined.AchievementNeeds = AggregateAchievementNeeds(achievementNeeds);
 		combined.TimeGatedNeeds = AggregateTimeGatedNeeds(timeGatedNeeds);
 		DropRowsWithListedIngredients(combined);
