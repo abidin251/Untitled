@@ -234,7 +234,9 @@ namespace mc
 		// can be repriced for the merged quantity instead of keeping the total of
 		// whichever plan happened to be listed first.
 		int CurrencyId = 0;
-		i64 CurrencyUnit = 0;
+		i64 CurrencyUnit = 0;     // what one purchase costs in that currency
+		int CurrencyBatch = 1;    // how many items one purchase hands over
+		i64 CurrencyTotal = 0;    // what the whole quantity costs, in whole purchases
 		bool FromVendor = false;      // a merchant sells it
 		bool FromTradingPost = false; // the Trading Post sells it
 		bool ResearchNotes = false;   // a line that exists to produce research notes
