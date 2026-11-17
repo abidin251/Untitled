@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -37,6 +38,138 @@ namespace mc
 			std::vector<AchievementNeed> AchievementNeeds;
 			// Work the plan can only do a few times a day or week.
 			std::vector<TimeGatedNeed> TimeGatedNeeds;
+
+			// Every change to the pools and the requirement tables goes through the
+			// helpers below and is journalled, so a route that is only being costed
+			// can be rolled back instead of working on a copy of the whole context
+			// (the account pool alone can hold thousands of entries, and a copy was
+			// made for every route of every node).
+			enum class OpKind : int
+			{
+				Pool,
+				CurrencyPool,
+				Required,
+				Needed
+			};
+			struct Op
+			{
+				OpKind Kind = OpKind::Pool;
+				int Id = 0;
+				i64 Amount = 0;
+			};
+			struct Checkpoint
+			{
+				std::size_t Journal = 0;
+				std::size_t Shopping = 0;
+				std::size_t Achievements = 0;
+				std::size_t TimeGated = 0;
+				int NodeCount = 0;
+				bool Truncated = false;
+			};
+			// What a costed route changed, kept so the winning route can be applied
+			// again after every route has been rolled back.
+			struct Delta
+			{
+				std::vector<Op> Ops;
+				std::vector<ShoppingItem> Shopping;
+				std::vector<AchievementNeed> Achievements;
+				std::vector<TimeGatedNeed> TimeGated;
+				int NodeCount = 0;
+				bool Truncated = false;
+			};
+			std::vector<Op> Journal;
+
+			int PooledItems(int aId) const
+			{
+				auto it = Pool.find(aId);
+				return it == Pool.end() ? 0 : it->second;
+			}
+			i64 PooledCurrency(int aId) const
+			{
+				auto it = CurrencyPool.find(aId);
+				return it == CurrencyPool.end() ? 0 : it->second;
+			}
+			void Change(OpKind aKind, int aId, i64 aAmount)
+			{
+				if (aAmount == 0)
+				{
+					return;
+				}
+				Perform(aKind, aId, aAmount);
+				Journal.push_back({ aKind, aId, aAmount });
+			}
+			// A requirement table only lists what a route asked for, so a line that a
+			// rollback brings back to nothing is removed rather than left at zero.
+			static void Adjust(std::map<int, i64>& aTable, int aId, i64 aAmount)
+			{
+				i64& value = aTable[aId];
+				value += aAmount;
+				if (value == 0)
+				{
+					aTable.erase(aId);
+				}
+			}
+			void Perform(OpKind aKind, int aId, i64 aAmount)
+			{
+				switch (aKind)
+				{
+				case OpKind::Pool: Pool[aId] -= static_cast<int>(aAmount); break;
+				case OpKind::CurrencyPool: CurrencyPool[aId] -= aAmount; break;
+				case OpKind::Required: Adjust(CurrencyRequired, aId, aAmount); break;
+				case OpKind::Needed: Adjust(CurrencyNeeded, aId, aAmount); break;
+				}
+			}
+
+			Checkpoint Mark() const
+			{
+				return { Journal.size(), Shopping.size(), AchievementNeeds.size(), TimeGatedNeeds.size(), NodeCount, Truncated };
+			}
+			Delta Extract(const Checkpoint& aMark) const
+			{
+				Delta delta;
+				delta.Ops.assign(Journal.begin() + static_cast<std::ptrdiff_t>(aMark.Journal), Journal.end());
+				delta.Shopping.assign(Shopping.begin() + static_cast<std::ptrdiff_t>(aMark.Shopping), Shopping.end());
+				delta.Achievements.assign(AchievementNeeds.begin() + static_cast<std::ptrdiff_t>(aMark.Achievements), AchievementNeeds.end());
+				delta.TimeGated.assign(TimeGatedNeeds.begin() + static_cast<std::ptrdiff_t>(aMark.TimeGated), TimeGatedNeeds.end());
+				delta.NodeCount = NodeCount - aMark.NodeCount;
+				delta.Truncated = Truncated;
+				return delta;
+			}
+			void Rollback(const Checkpoint& aMark)
+			{
+				while (Journal.size() > aMark.Journal)
+				{
+					const Op& op = Journal.back();
+					Perform(op.Kind, op.Id, -op.Amount);
+					Journal.pop_back();
+				}
+				Shopping.resize(aMark.Shopping);
+				AchievementNeeds.resize(aMark.Achievements);
+				TimeGatedNeeds.resize(aMark.TimeGated);
+				NodeCount = aMark.NodeCount;
+				Truncated = aMark.Truncated;
+			}
+			void Apply(Delta&& aDelta)
+			{
+				for (const Op& op : aDelta.Ops)
+				{
+					Change(op.Kind, op.Id, op.Amount);
+				}
+				for (auto& row : aDelta.Shopping)
+				{
+					Shopping.push_back(std::move(row));
+				}
+				for (auto& need : aDelta.Achievements)
+				{
+					AchievementNeeds.push_back(std::move(need));
+				}
+				for (auto& need : aDelta.TimeGated)
+				{
+					TimeGatedNeeds.push_back(std::move(need));
+				}
+				NodeCount += aDelta.NodeCount;
+				Truncated = Truncated || aDelta.Truncated;
+			}
 		};
 
 		// The cheapest coin price the Trading Post offers for an item. A buy order
@@ -151,6 +284,37 @@ namespace mc
 			return FormatNumber(aAmount) + " " + name;
 		}
 
+		// Text for a merchant price in a non-coin currency. A merchant hands over
+		// a whole batch for one price (ten Philosopher's Stones for a spirit shard),
+		// so a unit price is only the plain amount when a batch is a single item;
+		// otherwise it is quoted per batch, and the total is what the whole
+		// purchases cost rather than the batch price times the item count.
+		std::string CurrencyUnitText(const CurrencyDb& aCurrencies, int aCurrencyId, i64 aUnit, int aBatch)
+		{
+			std::string text = CurrencyPriceText(aCurrencies, aCurrencyId, aUnit);
+			if (aBatch > 1)
+			{
+				text += " per " + std::to_string(aBatch);
+			}
+			return text;
+		}
+
+		// Prices a shopping row in a merchant's non-coin currency for the number of
+		// purchases it takes to hand over the quantity.
+		void SetCurrencyPrice(ShoppingItem& aRow, const CurrencyDb& aCurrencies, int aCurrencyId, double aAmount, double aOutput, int aCrafts)
+		{
+			const int batch = std::max(1, static_cast<int>(std::lround(aOutput)));
+			const int purchases = aCrafts > 0 ? aCrafts : std::max(1, (aRow.Quantity + batch - 1) / batch);
+			aRow.UnitCost = 0;
+			aRow.TotalCost = 0;
+			aRow.CurrencyId = aCurrencyId;
+			aRow.CurrencyUnit = static_cast<i64>(aAmount + 0.5);
+			aRow.CurrencyBatch = batch;
+			aRow.CurrencyTotal = static_cast<i64>(aAmount * static_cast<double>(purchases) + 0.5);
+			aRow.PriceText = CurrencyUnitText(aCurrencies, aCurrencyId, aRow.CurrencyUnit, batch);
+			aRow.TotalPriceText = CurrencyPriceText(aCurrencies, aCurrencyId, aRow.CurrencyTotal);
+		}
+
 		void AddShoppingRow(
 			PlanContext& aContext,
 			const PlanNode& aNode,
@@ -231,13 +395,7 @@ namespace mc
 				return;
 			}
 
-			ShoppingItem& row = aContext.Shopping.back();
-			row.UnitCost = 0;
-			row.TotalCost = 0;
-			row.CurrencyId = aRecipe.MerchantCurrencyId;
-			row.CurrencyUnit = static_cast<i64>(aRecipe.MerchantCurrencyAmount + 0.5);
-			row.PriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit);
-			row.TotalPriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit * aNode.Remaining);
+			SetCurrencyPrice(aContext.Shopping.back(), aContext.Currencies, aRecipe.MerchantCurrencyId, aRecipe.MerchantCurrencyAmount, aRecipe.Output, aNode.Crafts);
 		}
 
 		void FillItemMetadata(PlanContext& aContext, PlanNode& aNode, int aItemId)
@@ -449,7 +607,7 @@ namespace mc
 			return false;
 		}
 
-		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, int aDepth)
+		PlanNode BuildNode(PlanContext& aContext, const RecipeNode& aNode, double aQuantity, int aDepth)
 		{
 			PlanNode node;
 			node.Id = aNode.Id;
@@ -467,13 +625,13 @@ namespace mc
 			}
 			++aContext.NodeCount;
 
-			const int required = CeilToInt(aNode.Quantity);
+			const int required = CeilToInt(aQuantity);
 
 			if (aNode.IsCurrency())
 			{
 				node.IsCurrency = true;
 				node.Required = required;
-				aContext.CurrencyRequired[aNode.Id] += required;
+				aContext.Change(PlanContext::OpKind::Required, aNode.Id, required);
 				auto currency = aContext.Currencies.find(aNode.Id);
 				node.Name = currency != aContext.Currencies.end() && !currency->second.Name.empty()
 					? currency->second.Name
@@ -485,9 +643,9 @@ namespace mc
 
 				if (aContext.Options.IncludeAccountItems)
 				{
-					const int available = static_cast<int>(aContext.CurrencyPool[aNode.Id]);
+					const int available = static_cast<int>(aContext.PooledCurrency(aNode.Id));
 					node.Owned = std::min(required, available);
-					aContext.CurrencyPool[aNode.Id] -= node.Owned;
+					aContext.Change(PlanContext::OpKind::CurrencyPool, aNode.Id, node.Owned);
 				}
 				node.Remaining = std::max(0, required - node.Owned);
 				node.Complete = node.Remaining == 0;
@@ -500,7 +658,7 @@ namespace mc
 				}
 				if (node.Remaining > 0)
 				{
-					aContext.CurrencyNeeded[aNode.Id] += node.Remaining;
+					aContext.Change(PlanContext::OpKind::Needed, aNode.Id, node.Remaining);
 				}
 				return node;
 			}
@@ -510,9 +668,9 @@ namespace mc
 
 			if (aContext.Options.IncludeAccountItems)
 			{
-				const int available = aContext.Pool[aNode.Id];
+				const int available = aContext.PooledItems(aNode.Id);
 				node.Owned = std::min(required, available);
-				aContext.Pool[aNode.Id] -= node.Owned;
+				aContext.Change(PlanContext::OpKind::Pool, aNode.Id, node.Owned);
 			}
 			node.Remaining = std::max(0, required - node.Owned);
 			node.Complete = node.Remaining == 0;
@@ -533,21 +691,26 @@ namespace mc
 			// A route made up from a table here rather than the provider's graph is
 			// only trusted when its ingredients are priced; the provider's own recipe
 			// is taken at its word, since it may legitimately cost no coin at all.
+			// Routes point at their recipes instead of holding copies: a provider
+			// recipe carries its whole subtree, and copying that for every node of
+			// every level made the walk quadratic in the size of the tree.
 			struct Route
 			{
-				RecipeNode Recipe;
+				const RecipeNode* Recipe = nullptr;
 				bool FromProvider = false;
 			};
 			std::vector<Route> routes;
+			std::deque<RecipeNode> generated;
 			if (aNode.IsRecipe())
 			{
-				routes.push_back({ aNode, true });
+				routes.push_back({ &aNode, true });
 			}
 			if (!aNode.LeafOnly)
 			{
 				if (const PromotionRecipe* promotion = FindPromotion(aNode.Id))
 				{
-					routes.push_back({ PromotionRecipeFor(aNode, *promotion), false });
+					generated.push_back(PromotionRecipeFor(aNode, *promotion));
+					routes.push_back({ &generated.back(), false });
 				}
 				// A combine whose material can be any one of a family is tried with
 				// every choice, so the cheapest gemstone is the one planned.
@@ -555,21 +718,32 @@ namespace mc
 				{
 					for (int option : choice->Choices)
 					{
-						routes.push_back({ ChoiceRecipeFor(aNode, *choice, option), false });
+						generated.push_back(ChoiceRecipeFor(aNode, *choice, option));
+						routes.push_back({ &generated.back(), false });
 					}
 				}
 			}
 
 			// A merchant purchase the plan was told to leave out: the item still has
 			// to be handed over, but it is not charged to the wallet and its
-			// commendations are not counted as a requirement.
-			if (!routes.empty() && aContext.Options.ExcludeGuildCommendations
+			// commendations are not counted as a requirement. The merchant stops being
+			// a way of getting the item, but the Forge promotion or any other route the
+			// item has is still one, so only the merchant's own route is dropped here
+			// and the rest are weighed against the Trading Post as usual.
+			const bool excludedMerchant = !routes.empty() && aContext.Options.ExcludeGuildCommendations
 				&& KindForRecipe(aNode) == SourceKind::Vendor
-				&& aNode.MerchantCurrencyId == kGuildCommendationCurrency)
+				&& aNode.MerchantCurrencyId == kGuildCommendationCurrency;
+			if (excludedMerchant)
 			{
-				// With the commendations left out the merchant is no longer a way of
-				// getting the item, so when it can be bought on the Trading Post that
-				// is what the plan does, and it is charged like any other listing.
+				routes.erase(
+					std::remove_if(routes.begin(), routes.end(), [](const Route& aRoute) { return aRoute.FromProvider; }),
+					routes.end());
+			}
+
+			// What is left of an excluded merchant item when no route of its own can
+			// make it: it is bought on the Trading Post when it is listed there, and
+			// otherwise stays a merchant line that is not charged.
+			auto excludedMerchantFallback = [&]() {
 				if (node.Tradable && unitPrice > 0 && GetPreference(aContext, aNode.Id) != Preference::Craft)
 				{
 					node.Source = SourceKind::TradingPost;
@@ -578,32 +752,35 @@ namespace mc
 					node.TotalCost = unitPrice * node.Remaining;
 					node.Purchasable = true;
 					AddShoppingRow(aContext, node, SourceKind::TradingPost, unitPrice, node.TotalCost, true, true);
-					return node;
+					return;
 				}
 
 				node.Source = SourceKind::Vendor;
 				node.MerchantDetail = MerchantLabel(aNode);
 				node.SourceDetail = node.MerchantDetail + " - guild commendations excluded";
-				node.Crafts = node.Remaining;
+				node.Crafts = aNode.Output > 1.0
+					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / aNode.Output - 1e-9)))
+					: node.Remaining;
 				AddShoppingRow(aContext, node, SourceKind::Vendor, 0, 0, true, false);
 				ShoppingItem& row = aContext.Shopping.back();
 				row.SourceDetail = "Guild Commendations excluded from the plan";
-				row.CurrencyId = kGuildCommendationCurrency;
-				row.CurrencyUnit = static_cast<i64>(aNode.MerchantCurrencyAmount + 0.5);
-				row.PriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit);
-				row.TotalPriceText = CurrencyPriceText(aContext.Currencies, row.CurrencyId, row.CurrencyUnit * node.Remaining);
+				SetCurrencyPrice(row, aContext.Currencies, kGuildCommendationCurrency, aNode.MerchantCurrencyAmount, aNode.Output, node.Crafts);
+			};
+			if (excludedMerchant && routes.empty())
+			{
+				excludedMerchantFallback();
 				return node;
 			}
 
-			RecipeNode recipe;
-			std::optional<PlanContext> scratch;
+			const RecipeNode* bestRecipe = nullptr;
+			PlanContext::Delta bestDelta;
 			std::vector<PlanNode> routeChildren;
 			i64 craftCost = 0;
 			int crafts = 0;
 			bool haveRoute = false;
 			for (const auto& entry : routes)
 			{
-				const RecipeNode& route = entry.Recipe;
+				const RecipeNode& route = *entry.Recipe;
 				const int routeCrafts = route.Output > 0.0
 					? std::max(1, static_cast<int>(std::ceil(static_cast<double>(node.Remaining) / route.Output - 1e-9)))
 					: node.Remaining;
@@ -618,14 +795,14 @@ namespace mc
 					&& route.MerchantCurrencyAmount > 0.0;
 				const i64 grossCoin = static_cast<i64>(route.MerchantCurrencyAmount * static_cast<double>(routeCrafts) + 0.5);
 
-				PlanContext candidate = aContext;
+				// The route is costed on the live context and rolled back below, so
+				// every route starts from the same state without a copy of it.
+				const PlanContext::Checkpoint mark = aContext.Mark();
 				i64 candidateCost = coinMerchant ? grossCoin : 0;
 				std::vector<PlanNode> candidateChildren;
 				for (const auto& component : route.Components)
 				{
-					RecipeNode scaled = component;
-					scaled.Quantity = component.Quantity * static_cast<double>(routeCrafts);
-					PlanNode child = BuildNode(candidate, scaled, aDepth + 1);
+					PlanNode child = BuildNode(aContext, component, component.Quantity * static_cast<double>(routeCrafts), aDepth + 1);
 					if (!(coinMerchant && component.IsCurrency() && component.Id == kCoinCurrency))
 					{
 						candidateCost += child.TotalCost;
@@ -649,24 +826,28 @@ namespace mc
 					}
 					if (unresolved)
 					{
+						aContext.Rollback(mark);
 						continue;
 					}
 				}
-				// The routes all make the same amount of the same item, so the cheaper
-				// bill is the cheaper route.
+				// Every route covers the quantity that is missing, and a batch that
+				// hands over more than that is paid for in full, so the cheaper bill
+				// is the cheaper route.
 				if (!haveRoute || candidateCost < craftCost)
 				{
 					haveRoute = true;
-					recipe = route;
+					bestRecipe = &route;
 					crafts = routeCrafts;
 					craftCost = candidateCost;
-					scratch.emplace(candidate);
+					bestDelta = aContext.Extract(mark);
 					routeChildren = std::move(candidateChildren);
 				}
+				aContext.Rollback(mark);
 			}
 
 			if (haveRoute)
 			{
+				const RecipeNode& recipe = *bestRecipe;
 				node.Crafts = crafts;
 				node.Children = std::move(routeChildren);
 
@@ -709,15 +890,7 @@ namespace mc
 				}
 				else
 				{
-					aContext.Pool = std::move(scratch->Pool);
-					aContext.CurrencyPool = std::move(scratch->CurrencyPool);
-					aContext.Shopping = std::move(scratch->Shopping);
-					aContext.CurrencyRequired = std::move(scratch->CurrencyRequired);
-					aContext.CurrencyNeeded = std::move(scratch->CurrencyNeeded);
-					aContext.NodeCount = scratch->NodeCount;
-					aContext.Truncated = scratch->Truncated;
-					aContext.AchievementNeeds = std::move(scratch->AchievementNeeds);
-					aContext.TimeGatedNeeds = std::move(scratch->TimeGatedNeeds);
+					aContext.Apply(std::move(bestDelta));
 					node.Source = KindForRecipe(recipe);
 					node.Discipline = recipe.Disciplines.empty() ? "" : recipe.Disciplines.front();
 					node.SourceDetail = RecipeDetail(recipe, node.Source);
@@ -740,6 +913,14 @@ namespace mc
 					AddAchievementNeed(aContext, node, recipe);
 					AddTimeGatedNeed(aContext, node, recipe);
 				}
+				return node;
+			}
+
+			// Every remaining route was impossible: an excluded merchant item falls
+			// back the same way it does when it has no other route at all.
+			if (excludedMerchant)
+			{
+				excludedMerchantFallback();
 				return node;
 			}
 
@@ -802,9 +983,11 @@ namespace mc
 					target = entry;
 					target.Quantity = 0;
 					target.TotalCost = 0;
+					target.CurrencyTotal = 0;
 				}
 				target.Quantity += entry.Quantity;
 				target.TotalCost += entry.TotalCost;
+				target.CurrencyTotal += entry.CurrencyTotal;
 			}
 
 			// A row merged from several plans carries the summed bill, so its unit
@@ -821,8 +1004,8 @@ namespace mc
 					// first plan that listed the row.
 					row.UnitCost = 0;
 					row.TotalCost = 0;
-					row.PriceText = CurrencyPriceText(aCurrencies, row.CurrencyId, row.CurrencyUnit);
-					row.TotalPriceText = CurrencyPriceText(aCurrencies, row.CurrencyId, row.CurrencyUnit * row.Quantity);
+					row.PriceText = CurrencyUnitText(aCurrencies, row.CurrencyId, row.CurrencyUnit, row.CurrencyBatch);
+					row.TotalPriceText = CurrencyPriceText(aCurrencies, row.CurrencyId, row.CurrencyTotal);
 				}
 				else if (row.PriceText.empty() && row.Quantity > 0 && row.TotalCost > 0)
 				{
@@ -1160,8 +1343,7 @@ namespace mc
 			plan.GoalName = "Item #" + std::to_string(aRoot.Id);
 		}
 
-		RecipeNode root = aRoot;
-		root.Quantity = std::max(1, aGoalQuantity);
+		const double goalQuantity = static_cast<double>(std::max(1, aGoalQuantity));
 
 		PlanContext context{
 			aItems,
@@ -1185,7 +1367,7 @@ namespace mc
 			context.CurrencyPool = aAccount.Currencies;
 		}
 
-		plan.Root = BuildNode(context, root, 0);
+		plan.Root = BuildNode(context, aRoot, goalQuantity, 0);
 		plan.RemainingCost = plan.Root.TotalCost;
 		plan.CurrencyRequired = context.CurrencyRequired;
 		plan.CurrencyNeeded = context.CurrencyNeeded;
@@ -1198,8 +1380,23 @@ namespace mc
 		// A second pass from scratch gives the denominator for progress and the
 		// "total cost if you owned nothing" figure. Ownership is the only thing the
 		// second pass changes, so without it the first pass already is that number.
+		// It is also skipped when the account holds nothing at all, since the
+		// walk would then be the very same one run twice.
 		i64 fullNotesRequired = context.CurrencyRequired[kResearchNoteCurrency];
+		i64 fullUnlistedCost = -1;
+		bool accountHoldsAnything = false;
 		if (aOptions.IncludeAccountItems)
+		{
+			for (const auto& pair : aAccount.Items)
+			{
+				accountHoldsAnything = accountHoldsAnything || pair.second > 0;
+			}
+			for (const auto& pair : aAccount.Currencies)
+			{
+				accountHoldsAnything = accountHoldsAnything || pair.second > 0;
+			}
+		}
+		if (aOptions.IncludeAccountItems && accountHoldsAnything)
 		{
 			PlanOptions fullOptions = aOptions;
 			fullOptions.IncludeAccountItems = false;
@@ -1219,9 +1416,17 @@ namespace mc
 				0,
 				false
 			};
-			const PlanNode fullRoot = BuildNode(fullContext, root, 0);
+			const PlanNode fullRoot = BuildNode(fullContext, aRoot, goalQuantity, 0);
 			plan.FullCost = fullRoot.TotalCost;
 			fullNotesRequired = fullContext.CurrencyRequired[kResearchNoteCurrency];
+			// The from-scratch bill has coin of its own that no line accounts for,
+			// and it is not the same coin the owned-stock walk leaves unlisted.
+			i64 fullListed = 0;
+			for (const auto& row : fullContext.Shopping)
+			{
+				fullListed += row.TotalCost;
+			}
+			fullUnlistedCost = std::max<i64>(0, fullRoot.TotalCost - fullListed);
 		}
 		else
 		{
@@ -1229,6 +1434,12 @@ namespace mc
 		}
 
 		plan.Shopping = AggregateShopping(context.Shopping, aCurrencies);
+		i64 walkListedCost = 0;
+		for (const auto& row : plan.Shopping)
+		{
+			walkListedCost += row.TotalCost;
+		}
+		const i64 walkUnlistedCost = std::max<i64>(0, plan.RemainingCost - walkListedCost);
 		// Research note lines are appended after aggregation so their own cost
 		// lines never merge with the ingredient they happen to share an id with.
 		ApplyResearchNotes(plan, context, context.CurrencyRequired[kResearchNoteCurrency], fullNotesRequired);
@@ -1243,11 +1454,16 @@ namespace mc
 			listedCost += row.TotalCost;
 		}
 		plan.UnlistedCost = std::max<i64>(0, plan.RemainingCost - listedCost);
-		if (aOptions.IgnoreUnlistedCost && plan.UnlistedCost > 0)
+		if (aOptions.IgnoreUnlistedCost && (plan.UnlistedCost > 0 || fullUnlistedCost > 0))
 		{
+			// The from-scratch figure drops its own unlisted coin, not the owned
+			// walk's: with stock in the bank the two differ, and subtracting one
+			// from the other left progress out of step with the remaining cost.
+			// What the research notes add on top is the same in both.
+			const i64 baseFullUnlisted = fullUnlistedCost >= 0 ? fullUnlistedCost : walkUnlistedCost;
+			const i64 notesUnlisted = std::max<i64>(0, plan.UnlistedCost - walkUnlistedCost);
 			plan.RemainingCost = std::max<i64>(0, plan.RemainingCost - plan.UnlistedCost);
-			plan.FullCost = std::max<i64>(0, plan.FullCost - plan.UnlistedCost);
-			plan.Complete = plan.RemainingCost == 0;
+			plan.FullCost = std::max<i64>(0, plan.FullCost - baseFullUnlisted - notesUnlisted);
 		}
 
 		return plan;
